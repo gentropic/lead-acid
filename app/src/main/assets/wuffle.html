@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>wuffle — spike</title>
+<style>
+  :root { color-scheme: dark; --ink:#e8ecef; --dim:#8a929a; --bg:#15171a; --card:#1d2024;
+    --line:#2f353b; --orange:#c8722e; --green:#4a9d5f; --blue:#4a7fb5; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; padding: calc(10px + env(safe-area-inset-top)) 14px calc(10px + env(safe-area-inset-bottom));
+    background:var(--bg); color:var(--ink); font:15px/1.4 "Barlow","Helvetica Neue",system-ui,sans-serif; }
+  h1 { font:600 15px "Space Mono",ui-monospace,monospace; margin:0 0 2px; color:var(--ink); }
+  .sub { color:var(--dim); font-size:12px; margin:0 0 12px; }
+  .modes { display:flex; gap:8px; margin-bottom:12px; }
+  .modes button { flex:1; padding:10px; border:1px solid var(--line); background:var(--card); color:var(--dim);
+    border-radius:8px; font:600 14px system-ui; }
+  .modes button.on { border-color:var(--orange); color:var(--orange); background:#241a12; }
+  .reading { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px 16px;
+    text-align:center; margin-bottom:12px; }
+  .big { font:700 46px "Space Mono",monospace; letter-spacing:-.02em; line-height:1.05; }
+  .big small { font-size:20px; color:var(--dim); font-weight:400; }
+  .label { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.08em; margin-top:6px; }
+  .level { height:6px; background:#0f1113; border-radius:3px; margin:14px 4px 2px; overflow:hidden; }
+  .level i { display:block; height:100%; background:var(--green); width:0; }
+  .measure { width:100%; padding:16px; border:none; border-radius:12px; background:var(--orange); color:#161006;
+    font:700 17px system-ui; margin-bottom:12px; }
+  .measure:active { filter:brightness(.9); }
+  .row { display:flex; gap:8px; margin-bottom:12px; }
+  .row button { flex:1; padding:11px; border:1px solid var(--line); background:var(--card); color:var(--ink);
+    border-radius:8px; font:600 14px system-ui; }
+  .net { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px;
+    margin-bottom:12px; display:flex; flex-direction:column; align-items:center; }
+  .net svg { width:100%; max-width:340px; height:auto; }
+  .net .cap { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-top:4px; }
+  /* the net primitives (bearing emits classPrefix 'sn'). The primitive circle
+     must be fill:none — an opaque fill paints OVER the grid + plotted data. The
+     dark disk goes on the background rect. */
+  .net .sn-background { fill:#0f1113; }
+  .net .sn-primitive { fill:none; stroke:#5a626a; stroke-width:1.2; }
+  .net .sn-grid { stroke:#39424a; stroke-width:.7; fill:none; }
+  .net .sn-cardinal { fill:var(--dim); }
+  .net .sn-plane { fill:none; stroke-width:2.2; }
+  .net .sn-line, .net .sn-pole { stroke-width:1.5; }
+  .log { font:12px "Space Mono",monospace; }
+  .log .hd { color:var(--dim); display:flex; justify-content:space-between; margin-bottom:4px; }
+  .log ol { list-style:none; margin:0; padding:0; max-height:34vh; overflow:auto; }
+  .log li { padding:7px 10px; border-left:3px solid var(--blue); background:var(--card); margin:3px 0;
+    border-radius:0 6px 6px 0; display:flex; justify-content:space-between; }
+  .log li b { color:var(--ink); font-weight:700; }
+  .log li span { color:var(--dim); }
+  #msg { color:var(--dim); font-size:12px; margin-top:8px; min-height:16px; }
+  .warn { color:var(--orange); }
+</style>
+</head>
+<body>
+<h1>wuffle</h1>
+<p class="sub">geological compass — spike (magnetic north, no declination)</p>
+
+<div class="modes">
+  <button id="mPlane" class="on">plane · bedding/joint</button>
+  <button id="mLine">line · lineation</button>
+</div>
+
+<div class="reading">
+  <div class="big" id="v1">—<small id="u1"></small></div>
+  <div class="label" id="l1">dip direction</div>
+  <div class="big" id="v2" style="font-size:32px;margin-top:8px">—<small id="u2"></small></div>
+  <div class="label" id="l2">dip</div>
+  <div class="level"><i id="lvl"></i></div>
+  <div class="label">tilt from horizontal</div>
+</div>
+
+<button class="measure" id="measure">● measure</button>
+
+<div class="net" id="net">
+  <div id="netHost"></div>
+  <div class="cap">equal-area (Schmidt) · lower hemisphere</div>
+</div>
+
+<div class="row">
+  <button id="clear">clear log</button>
+  <button id="publish">publish log →</button>
+</div>
+
+<div class="log">
+  <div class="hd"><span id="count">0 measurements</span><span>strike/dip · trend/plunge</span></div>
+  <ol id="list"></ol>
+</div>
+<div id="msg"></div>
+
+<script type="module">
+import { compass, Stereonet } from './bearing.js';
+import { shell } from './lead-acid.js';
+
+const $ = id => document.getElementById(id);
+let mode = 'plane';          // 'plane' | 'line'
+let cur = null;              // last computed reading
+let haveOrientation = false;
+const log = [];
+
+// keep the screen lit in the field (dogfoods shell.keepAwake)
+if (shell.present) shell.keepAwake(true);
+
+// the Schmidt net (equal-area is the structural-geology convention; the name
+// puns on Wulff but orientation data belongs on an equal-area net)
+const sn = new Stereonet({ projection: 'equal-area', size: 340, classPrefix: 'sn' });
+$('netHost').appendChild(sn.element());
+sn.render();
+
+const OR = { stroke: '#c8722e', fill: '#c8722e' };   // measured plane
+const BL = { stroke: '#4a7fb5', fill: '#4a7fb5' };   // measured line
+const GH = { stroke: '#5a626a', fill: '#5a626a' };   // live preview (ghost)
+
+function plotAll() {
+  sn.clear();
+  for (const m of log) {
+    if (m.mode === 'plane') sn.plane(m.d1, m.d2, OR);
+    else sn.line(m.d1, m.d2, BL);
+  }
+  if (cur) {   // faint live preview of the current reading
+    if (mode === 'plane') sn.plane(fmt(cur.d1), Math.round(cur.d2), GH);
+    else sn.line(fmt(cur.d1), Math.round(cur.d2), GH);
+  }
+  sn.render();
+}
+let netTimer = 0;
+function plotThrottled() { if (!netTimer) netTimer = setTimeout(() => { netTimer = 0; plotAll(); }, 120); }
+
+function fmt(n) { return (Math.round(n) % 360 + 360) % 360; }
+function setMode(m) {
+  mode = m;
+  $('mPlane').classList.toggle('on', m === 'plane');
+  $('mLine').classList.toggle('on', m === 'line');
+  $('l1').textContent = m === 'plane' ? 'dip direction' : 'trend';
+  $('l2').textContent = m === 'plane' ? 'dip' : 'plunge';
+}
+$('mPlane').onclick = () => setMode('plane');
+$('mLine').onclick = () => setMode('line');
+
+function onOrient(e) {
+  if (e.alpha == null) return;
+  haveOrientation = true;
+  const a = e.alpha, b = e.beta, g = e.gamma;
+  const [d1, d2] = mode === 'plane'
+    ? compass.planeFromDeviceOrientation(a, b, g)
+    : compass.lineFromDeviceOrientation(a, b, g);
+  cur = { d1, d2, a, b, g };
+  $('v1').innerHTML = fmt(d1) + '<small>°</small>';
+  $('v2').innerHTML = Math.round(d2) + '<small>°</small>';
+  $('lvl').style.width = Math.min(100, (d2 / 90) * 100) + '%';
+  plotThrottled();
+}
+// absolute frame carries a compass-referenced alpha (Android); fall back.
+window.addEventListener('deviceorientationabsolute', onOrient);
+window.addEventListener('deviceorientation', (e) => { if (!haveOrientation) onOrient(e); });
+
+$('measure').onclick = () => {
+  if (!cur) { msg('no orientation yet — tilt the phone', true); return; }
+  const strike = mode === 'plane' ? (fmt(cur.d1) + 270) % 360 : null;   // strike = dipdir - 90
+  const m = { i: log.length + 1, mode, d1: fmt(cur.d1), d2: Math.round(cur.d2), strike,
+    ts: new Date().toISOString() };
+  log.push(m);
+  const li = document.createElement('li');
+  li.innerHTML = mode === 'plane'
+    ? `<b>${String(m.d1).padStart(3,'0')}/${String(m.d2).padStart(2,'0')}</b><span>plane · strike ${String(strike).padStart(3,'0')}</span>`
+    : `<b>${String(m.d1).padStart(3,'0')}→${String(m.d2).padStart(2,'0')}</b><span>line</span>`;
+  $('list').prepend(li);
+  $('count').textContent = log.length + ' measurement' + (log.length === 1 ? '' : 's');
+  if (navigator.vibrate) navigator.vibrate(15);
+  msg('measured ' + (mode === 'plane' ? m.d1 + '/' + m.d2 : m.d1 + '→' + m.d2));
+  plotAll();
+};
+
+$('clear').onclick = () => { log.length = 0; $('list').innerHTML = ''; $('count').textContent = '0 measurements'; msg(''); plotAll(); };
+
+$('publish').onclick = async () => {
+  if (!log.length) { msg('nothing to publish', true); return; }
+  const rows = ['type,dip_dir_or_trend,dip_or_plunge,strike,timestamp'];
+  for (const m of log) rows.push(`${m.mode},${m.d1},${m.d2},${m.strike ?? ''},${m.ts}`);
+  const csv = new TextEncoder().encode(rows.join('\n') + '\n');
+  if (!shell.present) { msg('not in lead-acid — CSV built (' + csv.length + ' B), no shell to publish', true); return; }
+  try {
+    const res = await shell.publish('wuffle-log.csv', csv, { collection: 'Downloads', mime: 'text/csv' });
+    msg('published ' + log.length + ' → Downloads/wuffle-log.csv');
+    console.log('[wuffle] published', res.uri);
+  } catch (e) { msg('publish failed: ' + e, true); }
+};
+
+function msg(t, warn) { const m = $('msg'); m.textContent = t; m.className = warn ? 'warn' : ''; }
+
+setMode('plane');
+msg(shell.present ? 'lead-acid ready · lay the phone on a surface to measure' : 'desktop — no device orientation');
+console.log('[wuffle] present=' + shell.present);
+
+// debug hook (spike): plot without physical tilt
+window.__wuffle = { plot: (d1, d2, m) => { log.push({ i: log.length + 1, mode: m, d1, d2,
+  strike: m === 'plane' ? (d1 + 270) % 360 : null, ts: new Date().toISOString() }); plotAll();
+  $('count').textContent = log.length + ' measurements'; } };
+</script>
+</body>
+</html>

@@ -29,6 +29,8 @@ ROADMAP.md
 experiments/
 
 # Built artifacts dropped in for packaging — the monorepo builds these
-# (micro.html, wuffle.html, …); they are inputs, not sources of this repo.
+# (micro.html, …); they are inputs, not sources of this repo. But artifact.html
+# (the bench) and wuffle.html (the spike instrument) ARE source — keep them.
 app/src/main/assets/*.html
 !app/src/main/assets/artifact.html
+!app/src/main/assets/wuffle.html
