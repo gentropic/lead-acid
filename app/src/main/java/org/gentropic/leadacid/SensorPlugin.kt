@@ -6,26 +6,31 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Streaming sensor readings (SPEC §5.1) — the first PUSH-lane plugin, and the
- * V-1 test (does SSE flush per-event through shouldInterceptRequest?).
+ * Streaming sensor readings (SPEC §5.1) — the first PUSH-lane plugin. Events
+ * flow over the WebMessagePort (via [PushBus]), NOT SSE: `shouldInterceptRequest`
+ * buffers SSE ~2 KiB (V-1), and padding around that is silly; the port delivers
+ * directly with no buffering.
  *
  * Routes:
- *   GET /native/sensor/list                     — available sensors
- *   GET /native/sensor/stream?types=a,b&rateHz= — SSE feed; one event per reading
+ *   GET /native/sensor/list                       — available sensors
+ *   GET /native/sensor/stream?types=a,b&rateHz=N  — opens a port stream; returns
+ *                                                   {stream:id}. Events arrive on
+ *                                                   the port as {s:id, e:type, d:{t,v,acc}}
  *
- * No runtime permission needed for these types (rotation/magnetic/accel/gravity
- * are not "body sensors"), so the base manifest stays permission-free (§8).
- * Callbacks run on a background HandlerThread — never the main thread.
+ * No runtime permission (rotation/magnetic/accel/gravity aren't "body sensors"),
+ * so the base manifest stays permission-free (§8). Callbacks run on a background
+ * HandlerThread.
  */
-class SensorPlugin(private val sensorManager: SensorManager) : Plugin {
+class SensorPlugin(
+    private val sensorManager: SensorManager,
+    private val pushBus: PushBus,
+) : Plugin {
     override val name = "sensor"
 
     private val thread = HandlerThread("leadacid-sensor").apply { start() }
     private val handler = Handler(thread.looper)
-    private val streams = CopyOnWriteArrayList<SseStream>()
 
     private val byName = linkedMapOf(
         "rotation" to Sensor.TYPE_ROTATION_VECTOR,               // fused orientation (best compass)
@@ -61,44 +66,22 @@ class SensorPlugin(private val sensorManager: SensorManager) : Plugin {
 
         val rateUs = req.query["rateHz"]?.toIntOrNull()?.takeIf { it > 0 }?.let { 1_000_000 / it }
             ?: SensorManager.SENSOR_DELAY_GAME
-        // padTo defeats the interceptor's ~2 KiB SSE buffer (V-1); see SseStream.
-        val pad = (req.query["pad"]?.toIntOrNull() ?: 2200).coerceAtLeast(0)
 
-        val sse = SseStream(padTo = pad)
-        sse.comment("lead-acid sensor stream")
-
+        lateinit var stream: PortStream
         val listener = object : SensorEventListener {
             override fun onSensorChanged(e: SensorEvent) {
                 val n = nameByType[e.sensor.type] ?: return
                 val v = e.values.joinToString(",") { it.toString() }
-                sse.emit(n, """{"t":${e.timestamp},"v":[$v],"acc":${e.accuracy}}""")
+                stream.emit(n, """{"t":${e.timestamp},"v":[$v],"acc":${e.accuracy}}""")
             }
             override fun onAccuracyChanged(s: Sensor, acc: Int) {
                 val n = nameByType[s.type] ?: return
-                sse.emit("accuracy", """{"sensor":${BridgeResponse.jsonStr(n)},"acc":$acc}""")
+                stream.emit("accuracy", """{"sensor":${BridgeResponse.jsonStr(n)},"acc":$acc}""")
             }
         }
+        stream = pushBus.open(onClose = { sensorManager.unregisterListener(listener) })
         for (s in sensors) sensorManager.registerListener(listener, s, rateUs, handler)
-        streams.add(sse)
-        sse.onClose = {
-            sensorManager.unregisterListener(listener)
-            streams.remove(sse)
-        }
 
-        return BridgeResponse(
-            200, "OK", "text/event-stream",
-            mapOf(
-                "Content-Type" to "text/event-stream",
-                "Cache-Control" to "no-store",
-                "X-Accel-Buffering" to "no",
-            ),
-            sse,
-        )
-    }
-
-    /** Page-generation / pause lifecycle: tear down every open stream. */
-    fun releaseAll() {
-        for (s in streams) s.close()   // close() fires onClose → unregisterListener
-        streams.clear()
+        return BridgeResponse.json(200, "OK", """{"stream":${BridgeResponse.jsonStr(stream.id)}}""")
     }
 }

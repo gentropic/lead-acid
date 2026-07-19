@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.graphics.Color
 import android.view.View
 import android.view.WindowManager
@@ -61,7 +63,7 @@ class LeadAcidActivity : ComponentActivity() {
     }
 
     private val sensorPlugin by lazy {
-        SensorPlugin(getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager)
+        SensorPlugin(getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager, pushBus)
     }
 
     /** Fullscreen (§7c): the custom view an artifact hands us via onShowCustomView. */
@@ -80,6 +82,38 @@ class LeadAcidActivity : ComponentActivity() {
     private val BODY_ID_LEN = 12
     private val BODY_HEADER = "X-LeadAcid-Body-Id"
 
+    // Push streams (SPEC §4.2 via the port). id → onClose. The shell posts
+    // events over the SAME port, other direction (shell→page); no interceptor,
+    // no buffering. Port ops are main-thread; emit marshals via mainHandler.
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pushStreams = ConcurrentHashMap<String, () -> Unit>()
+    private val pushSeq = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun postToPage(json: String) {
+        mainHandler.post { runCatching { shellPort?.postMessage(WebMessageCompat(json)) } }
+    }
+    private fun closePushStream(id: String) {
+        pushStreams.remove(id)?.invoke()
+        postToPage("""{"s":${BridgeResponse.jsonStr(id)},"close":true}""")
+    }
+    private fun closeAllPushStreams() {
+        val ids = pushStreams.keys.toList()
+        for (id in ids) pushStreams.remove(id)?.invoke()
+    }
+
+    private val pushBus = object : PushBus {
+        override fun open(onClose: () -> Unit): PortStream {
+            val sid = "ps" + pushSeq.incrementAndGet()
+            pushStreams[sid] = onClose
+            return object : PortStream {
+                override val id = sid
+                override fun emit(event: String, data: String) =
+                    postToPage("""{"s":${BridgeResponse.jsonStr(sid)},"e":${BridgeResponse.jsonStr(event)},"d":$data}""")
+                override fun close() = closePushStream(sid)
+            }
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,12 +121,16 @@ class LeadAcidActivity : ComponentActivity() {
         File(filesDir, "spike0.bin").also(::ensureTestFile)
         register(filePlugin)
         register(sensorPlugin)
-        register(ShellPlugin(version = versionName()) { on ->
-            runOnUiThread {
-                if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            }
-        })
+        register(ShellPlugin(
+            version = versionName(),
+            onKeepAwake = { on ->
+                runOnUiThread {
+                    if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            },
+            onCloseStream = ::closePushStream,
+        ))
 
         // §7b: Back. Predictive back is declared in the manifest; this callback
         // makes the animation reflect what actually happens. Default is honest:
@@ -225,7 +263,7 @@ class LeadAcidActivity : ComponentActivity() {
             // opens don't leak. Built-in tokens survive.
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 filePlugin.releaseSaf()
-                sensorPlugin.releaseAll()
+                closeAllPushStreams()
                 shellPort = null
                 bodyById.clear()
             }
@@ -454,9 +492,9 @@ class LeadAcidActivity : ComponentActivity() {
 
     override fun onPause() {
         // SPEC §5 background stance: the WebView doesn't run in the background,
-        // so sensor streams stop when we leave the foreground (battery). The
-        // page's EventSource auto-reconnects on resume.
-        sensorPlugin.releaseAll()
+        // so push streams (sensors) stop when we leave the foreground (battery).
+        // The page re-opens them on resume.
+        closeAllPushStreams()
         super.onPause()
     }
 

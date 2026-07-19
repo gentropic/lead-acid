@@ -124,19 +124,23 @@ const gnss = new EventSource('/native/gnss/stream');
 gnss.addEventListener('raw', e => ingest(JSON.parse(e.data)));
 ```
 
-Native side: a plugin returns a `text/event-stream` response whose `InputStream` is an
-`SseStream` — `emit(event, data)` / `comment` / `close`, fed from any thread (bounded queue,
-drops oldest on overflow so the producer never blocks), with `onClose` firing when the WebView
-tears the response down (`EventSource.close()`, navigation) so the plugin releases its source.
+**The push lane is the WebMessagePort, not SSE.** A plugin opens a `PortStream` via the shell's
+`PushBus` and `emit(event, data)`s; the shell posts `{s:id, e:event, d:data}` over the SAME port
+that carries the body sidecar (§4.3), other direction (shell→page) — the two never collide.
+`lead-acid.js`'s `shell.stream(path)` opens it (`GET …?transport=port` → `{stream:id}`) and
+returns `{ on(event, cb), onClose(cb), close() }`; the page routes port messages by stream id.
 
-**V-1 RESOLVED (S24+ / WebView 150): the interceptor buffers ~2 KiB before delivering to the
-page, batching events into ~400 ms clumps** (measured: big gaps every ~20 events). The fix is
-`SseStream(padTo = N)` — a trailing comment after each event so every frame exceeds the buffer
-and flushes immediately. With `padTo ≈ 2200`: **per-event delivery, ~20 ms steady, 31 ms
-startup, zero gaps > 100 ms**. Cost is a couple KiB per event — trivial on a local (non-network)
-stream. So the **push lane is SSE + padding** for JSON events; no WebMessagePort fallback needed
-(binary firehoses still prefer port streams, §4.3). `EventSource` auto-reconnect works; the
-`sensor` plugin is the reference (`GET /native/sensor/stream?types=…&rateHz=…`).
+**Why not SSE (V-1 RESOLVED, S24+ / WebView 150):** `shouldInterceptRequest` buffers the
+response **~2 KiB** before delivering, batching SSE events into ~400 ms clumps (measured: big
+gaps every ~20 events). Padding each event past the buffer *works* (per-event, ~20 ms), but
+shipping ~2 KiB of junk per event as a load-bearing mechanism is silly. The port has no
+interceptor in the path — **direct delivery, no buffering, no padding** (measured identical: 99
+events/2 s, 20 ms mean, 24 ms max, zero clumps). So SSE is dropped; the port is the one push
+lane, JSON events and binary firehoses alike. Reference: the `sensor` plugin
+(`GET /native/sensor/stream?types=…&rateHz=…` → a port stream). Lifecycle: the stream's `onClose`
+runs on page-reload/pause (§5), and `GET /native/shell/closestream?id=` closes one on demand.
+Trade vs SSE: no built-in auto-reconnect — fine, the stream is local and only "drops" on reload,
+where the page re-opens it anyway.
 
 ### 4.3 The port — bodies and binary streams
 

@@ -11,12 +11,17 @@ package org.gentropic.leadacid
 class ShellPlugin(
     private val version: String,
     private val onKeepAwake: (Boolean) -> Unit,
+    private val onCloseStream: (String) -> Unit,
 ) : Plugin {
     override val name = "shell"
 
     override fun handle(req: BridgeRequest): BridgeResponse = when (req.subpath) {
         "keepawake" -> {
             onKeepAwake(req.query["on"] != "false")
+            BridgeResponse.json(200, "OK", """{"ok":true}""")
+        }
+        "closestream" -> {
+            req.query["id"]?.let(onCloseStream)
             BridgeResponse.json(200, "OK", """{"ok":true}""")
         }
         "info" -> BridgeResponse.json(

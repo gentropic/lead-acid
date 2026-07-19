@@ -21,9 +21,24 @@ export const shell = (() => {
   // awaits it — no race regardless of when the module loads vs onPageFinished.
   let resolvePort;
   const portReady = present ? new Promise((r) => { resolvePort = r; }) : Promise.resolve(null);
+  // Push streams (SPEC §4.2): the shell posts {s:id, e:event, d:data} over the
+  // SAME port (shell→page); no interceptor, no buffering, no padding. Routed by
+  // stream id to per-stream handlers.
+  const pushStreams = new Map();   // id → { handlers: Map<event,Set>, onclose }
   if (present) {
     window.addEventListener('message', (e) => {
-      if (e.data === '__leadacid_port' && e.ports && e.ports[0]) resolvePort(e.ports[0]);
+      if (e.data === '__leadacid_port' && e.ports && e.ports[0]) {
+        const port = e.ports[0];
+        port.onmessage = (ev) => {
+          let m; try { m = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch { return; }
+          if (!m || !m.s) return;
+          const st = pushStreams.get(m.s); if (!st) return;
+          if (m.close) { pushStreams.delete(m.s); st.onclose && st.onclose(); return; }
+          const set = st.handlers.get(m.e); if (set) for (const cb of set) cb(m.d);
+          const any = st.handlers.get('*'); if (any) for (const cb of any) cb(m.e, m.d);
+        };
+        resolvePort(port);
+      }
     });
   }
   let bodySeq = 0;
@@ -61,7 +76,27 @@ export const shell = (() => {
     }
     return fetch('/native/' + path, opts);
   }
-  const stream = (path) => new EventSource('/native/' + path);
+
+  // Open a push stream over the port (SPEC §4.2). Returns { on(event, cb),
+  // onClose(cb), close() }. The shell pushes events with no buffering — unlike
+  // SSE through the interceptor, which batches ~2 KiB (V-1), so no EventSource.
+  async function stream(path, opts) {
+    if (!present) throw new Error('no shell — streams are a native feature');
+    await portReady;
+    const sep = path.includes('?') ? '&' : '?';
+    const res = await native(path + sep + 'transport=port', opts);
+    if (!res.ok) throw new Error('stream open failed: ' + res.status);
+    const id = (await res.json()).stream;
+    const handlers = new Map();
+    const st = { handlers, onclose: null };
+    pushStreams.set(id, st);
+    const api = {
+      on(event, cb) { let s = handlers.get(event); if (!s) handlers.set(event, s = new Set()); s.add(cb); return api; },
+      onClose(cb) { st.onclose = cb; return api; },
+      close() { if (pushStreams.delete(id)) native('shell/closestream?id=' + encodeURIComponent(id)); },
+    };
+    return api;
+  }
 
   async function version() {
     if (!present) return null;
