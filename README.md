@@ -14,6 +14,7 @@ stream a multi-gigabyte local file a browser tab can't hold.
 
 - **`SPEC.md`** — the design of record (architecture, bridge, plugin catalog, postures).
 - **`PLAN.md`** — the execution plan (Spike 0 → M0 trench coat → M1 wuffle → template/bench).
+- **`WUFFLE.md`** — the first instrument: a geological compass with a live Schmidt net.
 
 The artifacts themselves live in the [auditable monorepo](https://github.com/endarthur/auditable)
 (micro, lamina, wuffle, …); this repo consumes their built HTML files.
