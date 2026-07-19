@@ -3,7 +3,6 @@ package org.gentropic.leadacid
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
 import java.io.InputStream
-import java.nio.ByteBuffer
 
 /**
  * The bridge contract (SPEC §4.1).
@@ -64,30 +63,6 @@ class BridgeResponse(
         fun jsonStr(s: String): String =
             "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
-    }
-}
-
-/** Streams a ByteBuffer slice without copying it whole — the mmap serving path. */
-class ByteBufferInputStream(private val buf: ByteBuffer) : InputStream() {
-    override fun read(): Int =
-        if (buf.hasRemaining()) buf.get().toInt() and 0xFF else -1
-
-    override fun read(b: ByteArray, off: Int, len: Int): Int {
-        if (len == 0) return 0
-        if (!buf.hasRemaining()) return -1
-        val n = minOf(len, buf.remaining())
-        buf.get(b, off, n)
-        return n
-    }
-
-    override fun available(): Int = buf.remaining()
-
-    /** O(1) — the loader may skip() gigabytes to apply a Range; never read-through. */
-    override fun skip(n: Long): Long {
-        if (n <= 0) return 0
-        val k = minOf(n, buf.remaining().toLong())
-        buf.position(buf.position() + k.toInt())
-        return k
     }
 }
 

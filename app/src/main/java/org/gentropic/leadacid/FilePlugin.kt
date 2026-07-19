@@ -2,56 +2,112 @@ package org.gentropic.leadacid
 
 import android.content.ContentResolver
 import android.net.Uri
-import java.io.File
+import android.os.ParcelFileDescriptor
+import java.io.Closeable
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 /**
  * Ranged file serving off mmap (SPEC §4.1 — "the load-bearing feature").
+ * Measured 11.5× per read / ~30× scattered vs Blob.slice on the same SAF doc.
  *
  * Routes:
- *   GET /native/fs/{token}          — full file (200) or `Range: bytes=…` slice (206/416)
- *   ANY /native/fs/echo             — spike diagnostic: reports what the interceptor saw
- *                                     (method + headers), proving what does/doesn't cross
+ *   GET /native/fs/{token}   — full (200) or `Range: bytes=…` slice (206/416)
+ *   GET /native/fs/list      — registered tokens + sizes
+ *   ANY /native/fs/echo      — interceptor diagnostic (what crosses the bridge)
  *
- * Spike version: tokens are a fixed map handed in by the activity. The real
- * plugin adds SAF publishing and token issuance (SPEC §5.1).
+ * Files serve through a WINDOW of 256 MiB segment maps created on demand, so a
+ * file larger than the 2 GiB MappedByteBuffer cap serves fine — only the touched
+ * segments map, and each map is < 2 GiB. SAF documents keep their fd open for the
+ * source's lifetime; `releaseSaf` closes them (page-generation lifecycle).
  */
-class FilePlugin(files: Map<String, File>) : Plugin {
+class FilePlugin(files: Map<String, java.io.File>) : Plugin {
     override val name = "fs"
 
-    // token → an mmap'd source. Seeded with the internal test file; SAF-picked
-    // documents register at pick time (registerSaf). The buffer is retained so
-    // repeat ranged reads reuse one map.
-    private class Source(val buf: MappedByteBuffer, val size: Long)
     private val sources = HashMap<String, Source>()
+    private val builtins = HashSet<String>()
 
     init {
         for ((token, file) in files) {
-            RandomAccessFile(file, "r").use { raf ->
-                val buf = raf.channel.map(FileChannel.MapMode.READ_ONLY, 0, file.length())
-                sources[token] = Source(buf, file.length())
-            }
+            val ch = RandomAccessFile(file, "r").channel
+            sources[token] = Source(ch, file.length(), ch)
+            builtins += token
         }
     }
 
-    // M0 WORK ITEM: MappedByteBuffer caps at 2 GiB (Int-indexed), so the single
-    // map here — and the .toInt() limits below — hard-fail beyond that. The real
-    // plugin serves >2 GiB through a window of maps (LRU of fixed-size segments).
-    /** Register a SAF document by URI: mmap its fd, key it by a token = the URI. */
+    /** A file served through lazily-mapped fixed-size segments (no 2 GiB cap). */
+    private class Source(
+        private val channel: FileChannel,
+        val size: Long,
+        private val closeable: Closeable?,
+    ) {
+        val segSize = 256L * 1024 * 1024              // < 2 GiB Int cap, generous stride
+        private val segs = HashMap<Int, MappedByteBuffer>()
+
+        @Synchronized
+        fun segment(i: Int): MappedByteBuffer = segs.getOrPut(i) {
+            val off = i.toLong() * segSize
+            channel.map(FileChannel.MapMode.READ_ONLY, off, minOf(segSize, size - off))
+        }
+
+        @Synchronized
+        fun release() {
+            segs.clear()
+            runCatching { channel.close() }
+            runCatching { closeable?.close() }
+        }
+    }
+
+    /**
+     * A stream over [pos, end) that spans segment boundaries, with O(1) skip —
+     * the loader-applies-range contract (SPIKE FINDING): we hand the stream from
+     * position 0 capped at end, and WebView's loader skips `start` itself.
+     */
+    private class WindowedInputStream(private val src: Source, private var pos: Long, private val end: Long) : InputStream() {
+        override fun read(): Int {
+            if (pos >= end) return -1
+            val seg = src.segment((pos / src.segSize).toInt())
+            val b = seg.get((pos % src.segSize).toInt()).toInt() and 0xFF
+            pos++
+            return b
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (pos >= end) return -1
+            val n = minOf(len.toLong(), end - pos).toInt()
+            var done = 0
+            while (done < n) {
+                val segIdx = (pos / src.segSize).toInt()
+                val segOff = (pos % src.segSize).toInt()
+                val chunk = minOf((n - done).toLong(), src.segSize - segOff).toInt()
+                val dup = src.segment(segIdx).duplicate().apply { position(segOff) }
+                dup.get(b, off + done, chunk)
+                done += chunk; pos += chunk
+            }
+            return n
+        }
+
+        override fun skip(n: Long): Long {
+            val step = maxOf(0, minOf(n, end - pos))
+            pos += step
+            return step
+        }
+
+        override fun available(): Int = minOf(end - pos, Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    /** Register a SAF document by URI: keep its fd open, map segments on demand. */
     @Synchronized
     fun registerSaf(uri: Uri, resolver: ContentResolver): String? {
         val token = tokenFor(uri)
         if (sources.containsKey(token)) return token
         return try {
-            resolver.openFileDescriptor(uri, "r")!!.use { pfd ->
-                val size = pfd.statSize
-                java.io.FileInputStream(pfd.fileDescriptor).use { fis ->
-                    val buf = fis.channel.map(FileChannel.MapMode.READ_ONLY, 0, size)
-                    sources[token] = Source(buf, size)
-                }
-            }
+            val pfd: ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")!!
+            val fis = java.io.FileInputStream(pfd.fileDescriptor)   // retained for lazy mapping
+            sources[token] = Source(fis.channel, pfd.statSize, Closeable { fis.close(); pfd.close() })
             token
         } catch (e: Exception) {
             android.util.Log.e("leadacid", "registerSaf failed for $uri", e)
@@ -59,7 +115,13 @@ class FilePlugin(files: Map<String, File>) : Plugin {
         }
     }
 
-    /** Stable, path-safe token for a content URI (last segment + hash). */
+    /** Page-generation lifecycle: drop all SAF sources (keep built-ins). */
+    @Synchronized
+    fun releaseSaf() {
+        val drop = sources.keys.filter { it !in builtins }
+        for (t in drop) { sources.remove(t)?.release() }
+    }
+
     private fun tokenFor(uri: Uri): String {
         val name = (uri.lastPathSegment ?: "doc").substringAfterLast('/')
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
@@ -70,30 +132,25 @@ class FilePlugin(files: Map<String, File>) : Plugin {
         if (req.subpath == "echo") return echo(req)
         if (req.subpath == "list") return list()
 
-        val src = sources[req.subpath]
+        val src = synchronized(this) { sources[req.subpath] }
             ?: return BridgeResponse.error(404, "Not Found", "unknown token: ${req.subpath}")
         if (req.method != "GET" && req.method != "HEAD")
             return BridgeResponse.error(405, "Method Not Allowed", req.method)
 
         val total = src.size
-        val buf = src.buf
         val rangeHeader = req.header("Range")
         val base = mapOf("Accept-Ranges" to "bytes")
 
         if (rangeHeader == null) {
-            val slice = buf.duplicate().apply { position(0); limit(total.toInt()) }
             return BridgeResponse(
                 200, "OK", "application/octet-stream",
                 base + mapOf("Content-Length" to total.toString()),
-                ByteBufferInputStream(slice.slice()),
+                WindowedInputStream(src, 0, total),
             )
         }
 
         val range = parseRange(rangeHeader, total)
         if (range == null) {
-            // The loader still applies the request's Range to OUR stream — give
-            // it a phantom big enough to skip the requested start, so it reaches
-            // EOF instead of erroring (short stream → net error → "Failed to fetch").
             val reqStart = rangeHeader.substringAfter("bytes=").substringBefore('-')
                 .trim().toLongOrNull() ?: total
             return BridgeResponse(
@@ -105,19 +162,14 @@ class FilePlugin(files: Map<String, File>) : Plugin {
 
         val (start, endIncl) = range
         val len = endIncl - start + 1
-        // SPIKE FINDING (S24+, WebView 150): AndroidStreamReaderURLLoader applies
-        // the request Range to the app's InputStream ITSELF — it skips `start`
-        // bytes (and resolves suffixes via available()), but never truncates the
-        // end. Contract: hand it the stream from position 0 CAPPED at end+1;
-        // do NOT pre-skip, or the loader's own skip runs off the end.
-        val slice = buf.duplicate().apply { position(0); limit((endIncl + 1).toInt()) }
+        // The loader skips `start` off this stream itself; hand it 0..end.
         return BridgeResponse(
             206, "Partial Content", "application/octet-stream",
             base + mapOf(
                 "Content-Range" to "bytes $start-$endIncl/$total",
                 "Content-Length" to len.toString(),
             ),
-            ByteBufferInputStream(slice.slice()),
+            WindowedInputStream(src, 0, endIncl + 1),
         )
     }
 
@@ -130,7 +182,7 @@ class FilePlugin(files: Map<String, File>) : Plugin {
         val left = spec.substring(0, dash).trim()
         val right = spec.substring(dash + 1).trim()
         return when {
-            left.isEmpty() -> { // suffix: last n bytes
+            left.isEmpty() -> {
                 val n = right.toLongOrNull() ?: return null
                 if (n <= 0) return null
                 val start = maxOf(0, total - n)
@@ -144,7 +196,6 @@ class FilePlugin(files: Map<String, File>) : Plugin {
         }
     }
 
-    /** GET /native/fs/list → registered tokens + sizes (the bench discovers SAF picks). */
     @Synchronized
     private fun list(): BridgeResponse {
         val items = sources.entries.joinToString(",") {
@@ -153,7 +204,6 @@ class FilePlugin(files: Map<String, File>) : Plugin {
         return BridgeResponse.json(200, "OK", "[$items]")
     }
 
-    /** What did the interceptor actually see? (POST bodies are expected to be absent.) */
     private fun echo(req: BridgeRequest): BridgeResponse {
         val headersJson = req.headers.entries.joinToString(",") {
             "${BridgeResponse.jsonStr(it.key)}:${BridgeResponse.jsonStr(it.value)}"

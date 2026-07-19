@@ -106,6 +106,14 @@ class LeadAcidActivity : ComponentActivity() {
         // Chromium — the on-device dev loop.
         if (debuggable) WebView.setWebContentsDebuggingEnabled(true)
 
+        // SPEC §4.4: the ONE frozen JS interface, so an artifact can synchronously
+        // detect the shell (typeof __leadacid) before its first fetch. version()
+        // is the only method — contractually. Everything else goes over /native.
+        webView.addJavascriptInterface(object {
+            @android.webkit.JavascriptInterface
+            fun version(): String = versionName()
+        }, "__leadacid")
+
         webView.webChromeClient = object : android.webkit.WebChromeClient() {
             // Page console → logcat, so test results are readable over adb.
             override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
@@ -191,6 +199,13 @@ class LeadAcidActivity : ComponentActivity() {
             }
         }
         webView.webViewClient = object : WebViewClientCompat() {
+            // Page generation (SPEC §5 session contract): a (re)load invalidates
+            // the prior page's SAF picks — release their fds/maps so repeated
+            // opens don't leak. Built-in tokens survive.
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                filePlugin.releaseSaf()
+            }
+
             override fun shouldInterceptRequest(
                 view: WebView,
                 request: WebResourceRequest,

@@ -165,7 +165,16 @@ export const shell = {
 };
 ```
 
-Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter**, so Works/notebook artifacts mount phone storage with zero new concepts.
+Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter** (`shell.fsBackend(Backend)` — a `readRange`/`rangeReadable`-true subclass), so Works/notebook artifacts mount phone storage with zero new concepts.
+
+**BUILT + validated (2026-07-19).** `lead-acid.js` ships: `present`, `native`, `stream`,
+`version`, `keepAwake`, `files`, `fileSource(token)` (a duck-typed `readRange` source lamina/
+micro consume directly), and `fsBackend(Backend)` (the `@gcu/vfs` adapter). On device: all pass,
+the adapter's `readRange` rides the mmap path (14.3× per read). **The non-Sealed default:** since
+Sealed artifacts can't fetch under `connect-src 'none'`, `/native/fs` is the default *read* path
+for **non-Sealed** GCU artifacts — mount `shell.fsBackend` and every `readRange` gets the mmap
+speedup with zero artifact changes. (A transparent `Blob.prototype.slice` patch is a documented
+future option for non-`@gcu/vfs` artifacts; the adapter is the shipping default.)
 
 ### 4.6 Error conventions
 

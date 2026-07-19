@@ -299,6 +299,32 @@ document.getElementById('pick').addEventListener('change', async (e) => {
     ' ms = ' + speedup.toFixed(1) + 'x. ' +
     (speedup > 3 ? '/native/fs is worth building for big-file streaming.'
                  : 'mmap barely beats Blob.slice on SAF fds — /native/fs is NOT worth the integration.'));
+
+  // --- lead-acid.js: the shell module + @gcu/vfs fs-adapter (SPEC §4.5) ---
+  try {
+    const { shell } = await import('./lead-acid.js');
+    safReport(shell.present ? 'pass' : 'fail', 'lead-acid.js shell.present',
+      shell.present ? 'version ' + await shell.version() : '__leadacid interface missing');
+
+    // fileSource: the duck-typed source lamina/micro consume (readRange fast path)
+    const src = shell.fileSource(token, size);
+    const b = await src.readRange(384 * 1048576, 64 * 1024);
+    safReport(patternErr(b, 384 * 1048576) ? 'fail' : 'pass', 'shell.fileSource.readRange',
+      'mmap path via the shell module, bytes ok · rangeReadable=' + src.rangeReadable);
+
+    // fsBackend: a @gcu/vfs Backend over /native/fs. Feed a minimal Backend base
+    // so we don't bundle vfs — the adapter subclasses whatever we pass.
+    class FakeBackend { get rangeReadable() { return false; } }
+    const Be = shell.fsBackend(FakeBackend);
+    const be = new Be();
+    const st = await be.stat('/' + token);
+    const vr = await be.readRange('/' + token, 511 * 1048576, 64 * 1024);
+    const ok = be.rangeReadable && st.size === size && !patternErr(vr, 511 * 1048576);
+    safReport(ok ? 'pass' : 'fail', 'shell.fsBackend (@gcu/vfs adapter)',
+      'rangeReadable=' + be.rangeReadable + ' · stat.size=' + st.size + ' · readRange bytes ' +
+      (patternErr(vr, 511 * 1048576) ? 'BAD' : 'ok') +
+      ' — non-Sealed artifacts get the mmap path for free');
+  } catch (e) { safReport('fail', 'lead-acid.js adapter', String(e)); }
 });
 </script>
 </body>
