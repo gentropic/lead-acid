@@ -1,5 +1,7 @@
 package org.gentropic.leadacid
 
+import android.content.ContentResolver
+import android.net.Uri
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.MappedByteBuffer
@@ -16,33 +18,65 @@ import java.nio.channels.FileChannel
  * Spike version: tokens are a fixed map handed in by the activity. The real
  * plugin adds SAF publishing and token issuance (SPEC §5.1).
  */
-class FilePlugin(private val files: Map<String, File>) : Plugin {
+class FilePlugin(files: Map<String, File>) : Plugin {
     override val name = "fs"
 
-    private val mapped = HashMap<String, MappedByteBuffer>()
+    // token → an mmap'd source. Seeded with the internal test file; SAF-picked
+    // documents register at pick time (registerSaf). The buffer is retained so
+    // repeat ranged reads reuse one map.
+    private class Source(val buf: MappedByteBuffer, val size: Long)
+    private val sources = HashMap<String, Source>()
 
-    // M0 WORK ITEM: MappedByteBuffer caps at 2 GiB (Int-indexed), so this
-    // single-map approach — and the .toInt() limits below — hard-fail beyond
-    // that. The real plugin serves >2 GiB files through a window of maps
-    // (map per request range, or a small LRU of fixed-size segments).
-    @Synchronized
-    private fun mmap(token: String, file: File): MappedByteBuffer =
-        mapped.getOrPut(token) {
+    init {
+        for ((token, file) in files) {
             RandomAccessFile(file, "r").use { raf ->
-                raf.channel.map(FileChannel.MapMode.READ_ONLY, 0, file.length())
+                val buf = raf.channel.map(FileChannel.MapMode.READ_ONLY, 0, file.length())
+                sources[token] = Source(buf, file.length())
             }
         }
+    }
+
+    // M0 WORK ITEM: MappedByteBuffer caps at 2 GiB (Int-indexed), so the single
+    // map here — and the .toInt() limits below — hard-fail beyond that. The real
+    // plugin serves >2 GiB through a window of maps (LRU of fixed-size segments).
+    /** Register a SAF document by URI: mmap its fd, key it by a token = the URI. */
+    @Synchronized
+    fun registerSaf(uri: Uri, resolver: ContentResolver): String? {
+        val token = tokenFor(uri)
+        if (sources.containsKey(token)) return token
+        return try {
+            resolver.openFileDescriptor(uri, "r")!!.use { pfd ->
+                val size = pfd.statSize
+                java.io.FileInputStream(pfd.fileDescriptor).use { fis ->
+                    val buf = fis.channel.map(FileChannel.MapMode.READ_ONLY, 0, size)
+                    sources[token] = Source(buf, size)
+                }
+            }
+            token
+        } catch (e: Exception) {
+            android.util.Log.e("leadacid", "registerSaf failed for $uri", e)
+            null
+        }
+    }
+
+    /** Stable, path-safe token for a content URI (last segment + hash). */
+    private fun tokenFor(uri: Uri): String {
+        val name = (uri.lastPathSegment ?: "doc").substringAfterLast('/')
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return "saf-${(uri.toString().hashCode().toLong() and 0xffffffffL).toString(16)}-$name"
+    }
 
     override fun handle(req: BridgeRequest): BridgeResponse {
         if (req.subpath == "echo") return echo(req)
+        if (req.subpath == "list") return list()
 
-        val file = files[req.subpath]
+        val src = sources[req.subpath]
             ?: return BridgeResponse.error(404, "Not Found", "unknown token: ${req.subpath}")
         if (req.method != "GET" && req.method != "HEAD")
             return BridgeResponse.error(405, "Method Not Allowed", req.method)
 
-        val total = file.length()
-        val buf = mmap(req.subpath, file)
+        val total = src.size
+        val buf = src.buf
         val rangeHeader = req.header("Range")
         val base = mapOf("Accept-Ranges" to "bytes")
 
@@ -108,6 +142,15 @@ class FilePlugin(private val files: Map<String, File>) : Plugin {
                 if (start >= total || end < start) null else Pair(start, minOf(end, total - 1))
             }
         }
+    }
+
+    /** GET /native/fs/list → registered tokens + sizes (the bench discovers SAF picks). */
+    @Synchronized
+    private fun list(): BridgeResponse {
+        val items = sources.entries.joinToString(",") {
+            """{"token":${BridgeResponse.jsonStr(it.key)},"size":${it.value.size}}"""
+        }
+        return BridgeResponse.json(200, "OK", "[$items]")
     }
 
     /** What did the interceptor actually see? (POST bodies are expected to be absent.) */

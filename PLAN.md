@@ -170,6 +170,19 @@ capability. Rule: few-hundred-MB → SAF (artifact untouched); multi-GB latency-
 streaming (micro's LOD-read pattern) → wire `/native/fs`. The fs plugin thus graduates from
 "maybe needed for M0" to "the perf path, wired when a model is big enough to feel it."
 
+**mmap-over-SAF-fd MEASURED (2026-07-19, S24+): 11.5× per read, ~30× scattered — /native/fs
+is worth building.** Head-to-head on the SAME 512 MiB SAF document: `Blob.slice` ~52 ms/64KiB
+(0.6 MB/s scattered) vs the fs plugin's mmap-over-fd ~4.5 ms/64KiB (17.9 MB/s scattered). The
+scattered figure is micro's real LOD-read pattern → ~30× there. Caveat: SAF-fd mmap (18 MB/s
+scattered) is itself ~3.5× slower than internal-storage mmap (65 MB/s, Spike 0) — the
+content-provider fd has its own overhead — but still crushes Blob.slice. **So the fs plugin's
+SERVING half is now built and validated** (`registerSaf` mmaps the SAF fd at pick time; the
+`list` route; ranged serving). What remains for real micro use is the INTEGRATION, still
+reasonably deferred until a model is big enough to feel 52 ms/read: (1) the CSP tension —
+micro Sealed `connect-src 'none'` blocks the fetch, so micro needs the feature-detected
+`shell.native()`/`@gcu/vfs`-adapter branch (SPEC §4.5), or a posture decision; (2) windowed
+maps past the 2 GiB MappedByteBuffer cap; (3) token lifecycle (release on page generation).
+
 ### M0 — the trench coat *(I write the Kotlin; you build+run)*
 
 `LeadAcidActivity` + asset loader + interceptor + `PluginRegistry` + the ranged `FilePlugin`

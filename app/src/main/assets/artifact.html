@@ -237,6 +237,57 @@ document.getElementById('pick').addEventListener('change', async (e) => {
     'far/near slice time ratio = ' + ratio.toFixed(1) + 'x — ' +
     (ratio < 4 ? 'O(1): SAF Blob.slice is real random access; /native/fs is an optimization'
                : 'O(offset): SAF streams to the offset; /native/fs earns its place for big files'));
+
+  // --- head to head: mmap-over-SAF-fd (/native/fs) on the SAME picked file ---
+  // The shell registered the SAF pick as an fs token; find the newest one.
+  let token = null;
+  try {
+    const reg = await (await fetch('/native/fs/list')).json();
+    const match = reg.filter(r => r.size === size);
+    token = (match[match.length - 1] || reg[reg.length - 1] || {}).token;
+  } catch (e) { safReport('fail', '/native/fs/list', String(e)); }
+  if (!token) { safReport('info', 'mmap comparison skipped', 'no fs token for this file'); return; }
+
+  async function fsSlice(off, len) {
+    const r = await fetch('/native/fs/' + encodeURIComponent(token),
+      { headers: { Range: 'bytes=' + off + '-' + (off + len - 1) } });
+    return { status: r.status, buf: new Uint8Array(await r.arrayBuffer()) };
+  }
+  // same offsets, same reps
+  const fsTimes = [];
+  for (const off of marks) {
+    let best = Infinity, bad = null;
+    for (let r = 0; r < 5; r++) {
+      const t = performance.now();
+      const { status, buf } = await fsSlice(off, K);
+      const dt = performance.now() - t;
+      if (dt < best) best = dt;
+      bad = bad || (status !== 206 ? 'status ' + status : patternErr(buf, off));
+    }
+    fsTimes.push(best);
+    safReport(bad ? 'fail' : 'pass', 'fs mmap @ ' + (off / 1048576).toFixed(0) + ' MiB',
+      (bad ? bad : 'bytes ok') + ' · ' + best.toFixed(2) + ' ms/64KiB');
+  }
+  // same 64 scattered reads, over /native/fs
+  const seedR = (i) => Math.min(size - K, Math.floor((i * 2654435761 % 1000) / 1000 * size));
+  const ft0 = performance.now();
+  let fbad = null;
+  for (let i = 0; i < 64; i++) {
+    const { status, buf } = await fsSlice(seedR(i), K);
+    fbad = fbad || (status !== 206 ? 'status ' + status : patternErr(buf, seedR(i)));
+  }
+  const frms = performance.now() - ft0;
+  safReport(fbad ? 'fail' : 'info', 'fs mmap: 64 scattered reads',
+    (fbad ? fbad : (64 * K / 1048576 / (frms / 1000)).toFixed(1) + ' MB/s · ' + frms.toFixed(0) + ' ms'));
+
+  const blobMed = times.slice().sort((a, b) => a - b)[2];
+  const fsMed = fsTimes.slice().sort((a, b) => a - b)[2];
+  const speedup = blobMed / Math.max(0.01, fsMed);
+  safReport('info', 'VERDICT: mmap-over-SAF-fd vs Blob.slice',
+    'median per-64KiB — Blob.slice ' + blobMed.toFixed(1) + ' ms vs fs-mmap ' + fsMed.toFixed(1) +
+    ' ms = ' + speedup.toFixed(1) + 'x. ' +
+    (speedup > 3 ? '/native/fs is worth building for big-file streaming.'
+                 : 'mmap barely beats Blob.slice on SAF fds — /native/fs is NOT worth the integration.'));
 });
 </script>
 </body>

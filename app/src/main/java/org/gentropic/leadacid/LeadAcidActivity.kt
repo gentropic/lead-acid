@@ -41,12 +41,15 @@ class LeadAcidActivity : Activity() {
 
     private var fileChooserCallback: android.webkit.ValueCallback<Array<Uri>>? = null
 
+    /** The fs plugin — created once so it can hold SAF-fd maps across requests. */
+    private val filePlugin by lazy { FilePlugin(mapOf("spike0.bin" to File(filesDir, "spike0.bin"))) }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val testFile = File(filesDir, "spike0.bin").also(::ensureTestFile)
-        register(FilePlugin(mapOf("spike0.bin" to testFile)))
+        File(filesDir, "spike0.bin").also(::ensureTestFile)
+        register(filePlugin)
 
         val assetLoader = WebViewAssetLoader.Builder()
             .setDomain(ORIGIN)
@@ -200,6 +203,9 @@ class LeadAcidActivity : Activity() {
                 data.clipData?.let { cd -> Array(cd.itemCount) { cd.getItemAt(it).uri } }
                     ?: data.data?.let { arrayOf(it) }
             } else null
+            // Register each picked SAF document as an fs token, so the artifact
+            // can also reach it via GET /native/fs/<token> (mmap-over-fd path).
+            uris?.forEach { filePlugin.registerSaf(it, contentResolver) }
             cb?.onReceiveValue(uris)
             return
         }
