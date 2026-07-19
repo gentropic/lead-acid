@@ -1,15 +1,22 @@
 package org.gentropic.leadacid
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.graphics.Color
+import android.view.View
+import android.view.WindowManager
+import android.webkit.GeolocationPermissions
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
@@ -22,7 +29,7 @@ import java.io.File
  * declare its plugin list; the spike declares FilePlugin inline.
  * (Kotlin block comments NEST — never write /native/ followed by two stars in a comment.)
  */
-class LeadAcidActivity : Activity() {
+class LeadAcidActivity : ComponentActivity() {
 
     companion object {
         const val ORIGIN = "appassets.androidplatform.net"
@@ -44,12 +51,37 @@ class LeadAcidActivity : Activity() {
     /** The fs plugin — created once so it can hold SAF-fd maps across requests. */
     private val filePlugin by lazy { FilePlugin(mapOf("spike0.bin" to File(filesDir, "spike0.bin"))) }
 
+    /** Fullscreen (§7c): the custom view an artifact hands us via onShowCustomView. */
+    private var customView: View? = null
+    private var customViewCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
+    private var pendingGeolocation: Pair<String, GeolocationPermissions.Callback>? = null
+    private var pendingPermissionRequest: PermissionRequest? = null
+
+    private val PERM_LOCATION = 81
+    private val PERM_CAMERA = 82
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         File(filesDir, "spike0.bin").also(::ensureTestFile)
         register(filePlugin)
+        register(ShellPlugin(version = versionName()) { on ->
+            runOnUiThread {
+                if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        })
+
+        // §7b: Back. Predictive back is declared in the manifest; this callback
+        // makes the animation reflect what actually happens. Default is honest:
+        // no in-page history → finish. (Artifact-intercept via shell.onBack is a
+        // lead-acid.js addition — the shell would consult a cached back-state.)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView.canGoBack()) webView.goBack() else finish()
+            }
+        })
 
         val assetLoader = WebViewAssetLoader.Builder()
             .setDomain(ORIGIN)
@@ -102,6 +134,60 @@ class LeadAcidActivity : Activity() {
                 return runCatching { startActivityForResult(intent, FILE_CHOOSER_REQ) }
                     .onFailure { fileChooserCallback = null }
                     .isSuccess
+            }
+
+            // §7c: fullscreen (immersive artifacts, video). Add the custom view
+            // over the root; restore on hide.
+            override fun onShowCustomView(view: View, cb: CustomViewCallback) {
+                if (customView != null) { cb.onCustomViewHidden(); return }
+                customView = view
+                customViewCallback = cb
+                (window.decorView as android.view.ViewGroup).addView(
+                    view,
+                    android.view.ViewGroup.LayoutParams(-1, -1),
+                )
+                webView.visibility = View.GONE
+            }
+
+            override fun onHideCustomView() {
+                val v = customView ?: return
+                (window.decorView as android.view.ViewGroup).removeView(v)
+                customView = null
+                customViewCallback?.onCustomViewHidden()
+                customViewCallback = null
+                webView.visibility = View.VISIBLE
+            }
+
+            // §7c: standard web geolocation. Granted iff the app holds the
+            // Android permission (base manifest requests none — §8; a location
+            // plugin's manifest merge is what turns this on for an app).
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String,
+                callback: GeolocationPermissions.Callback,
+            ) {
+                if (hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
+                    callback.invoke(origin, true, false)
+                } else if (declaresPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
+                    pendingGeolocation = origin to callback
+                    requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), PERM_LOCATION)
+                } else {
+                    callback.invoke(origin, false, false)   // capability absent
+                }
+            }
+
+            // §7c: getUserMedia (camera preview before/without the camera plugin).
+            // Grant only the camera resource, and only if the app holds CAMERA.
+            override fun onPermissionRequest(request: PermissionRequest) {
+                val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                if (!wantsCamera) { request.deny(); return }
+                if (hasPermission(android.Manifest.permission.CAMERA)) {
+                    request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                } else if (declaresPermission(android.Manifest.permission.CAMERA)) {
+                    pendingPermissionRequest = request
+                    requestPermissions(arrayOf(android.Manifest.permission.CAMERA), PERM_CAMERA)
+                } else {
+                    request.deny()   // capability absent
+                }
             }
         }
         webView.webViewClient = object : WebViewClientCompat() {
@@ -211,6 +297,37 @@ class LeadAcidActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    private fun hasPermission(perm: String) =
+        ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+
+    /** Is the permission even in this app's merged manifest? (Plugin-merge gate.) */
+    private fun declaresPermission(perm: String): Boolean = runCatching {
+        packageManager.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+            .requestedPermissions?.contains(perm) == true
+    }.getOrDefault(false)
+
+    private fun versionName(): String = runCatching {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "0"
+    }.getOrDefault("0")
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        when (requestCode) {
+            PERM_LOCATION -> pendingGeolocation?.let { (origin, cb) ->
+                cb.invoke(origin, granted, false); pendingGeolocation = null
+            }
+            PERM_CAMERA -> pendingPermissionRequest?.let { req ->
+                if (granted) req.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) else req.deny()
+                pendingPermissionRequest = null
+            }
+        }
     }
 
     override fun onDestroy() {

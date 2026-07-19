@@ -163,6 +163,17 @@ async function run() {
     else report('fail', 'unknown plugin', 'status ' + r.status);
   } catch (e) { report('fail', 'unknown plugin', String(e)); }
 
+  // 11. §7c shell controls: keepawake route + shell/info
+  try {
+    const info = await (await fetch('/native/shell/info')).json();
+    report(info.present ? 'pass' : 'fail', 'shell/info — present=' + info.present, 'version ' + info.version);
+  } catch (e) { report('fail', 'shell/info', String(e)); }
+  try {
+    const r = await fetch('/native/shell/keepawake?on=true', { method: 'POST' });
+    const j = await r.json();
+    report(j.ok ? 'pass' : 'fail', 'shell/keepawake on', 'FLAG_KEEP_SCREEN_ON set — screen stays lit');
+  } catch (e) { report('fail', 'shell/keepawake', String(e)); }
+
   const fails = results.filter(r => r === 'fail').length;
   const v = document.getElementById('verdict');
   if (fails === 0) { v.className = 'ok'; v.textContent = 'SPIKE 0 PASSES — the thesis holds. ' + results.filter(r => r === 'pass').length + ' pass, 0 fail.'; }

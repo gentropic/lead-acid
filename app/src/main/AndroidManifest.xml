@@ -5,6 +5,7 @@
     <application
         android:label="lead-acid spike 0"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
