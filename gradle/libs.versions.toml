@@ -1,0 +1,15 @@
+# One place for every version — including the yearly targetSdk ratchet (SPEC §6).
+[versions]
+agp = "8.11.1"
+kotlin = "2.1.21"
+webkit = "1.14.0"
+compileSdk = "36"
+targetSdk = "36"
+minSdk = "29"
+
+[libraries]
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

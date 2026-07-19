@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lead-acid spike 0</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom));
+    background: #17191c; color: #d8dce0;
+    font: 14px/1.45 "Space Mono", ui-monospace, monospace;
+  }
+  h1 { font-size: 16px; margin: 4px 0 2px; color: #e8ecef; }
+  .sub { color: #7a828a; font-size: 12px; margin: 0 0 12px; }
+  .test { padding: 7px 10px; margin: 4px 0; border-left: 3px solid #3a3f45; background: #1d2024; }
+  .test b { display: inline-block; min-width: 52px; }
+  .pass { border-left-color: #4a9d5f; } .pass b { color: #6fc586; }
+  .fail { border-left-color: #c25450; } .fail b { color: #e07a76; }
+  .info { border-left-color: #4a7fb5; } .info b { color: #7aa8d8; }
+  .detail { color: #8a929a; font-size: 12px; word-break: break-all; }
+  #verdict { margin: 14px 0; padding: 10px 12px; font-size: 15px; border: 1px solid #3a3f45; }
+  #verdict.ok { border-color: #4a9d5f; color: #6fc586; }
+  #verdict.bad { border-color: #c25450; color: #e07a76; }
+  .env { color: #666d75; font-size: 11px; margin-top: 16px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>lead-acid — spike 0</h1>
+<p class="sub">ranged fetch through shouldInterceptRequest, off mmap</p>
+<div id="out"></div>
+<div id="verdict">running…</div>
+<div class="env" id="env"></div>
+
+<script>
+const SIZE = 8 * 1024 * 1024;
+const out = document.getElementById('out');
+const results = [];
+
+function report(kind, name, detail) {
+  results.push(kind);
+  const d = document.createElement('div');
+  d.className = 'test ' + kind;
+  d.innerHTML = '<b>' + kind.toUpperCase() + '</b> ' + name +
+    (detail ? '<div class="detail">' + detail + '</div>' : '');
+  out.appendChild(d);
+}
+
+// byte[i] = i mod 251
+function checkPattern(bytes, offset) {
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== (offset + i) % 251) return 'byte ' + i + ': got ' + bytes[i] + ', want ' + ((offset + i) % 251);
+  }
+  return null;
+}
+
+async function ranged(start, endIncl) {
+  const spec = (start === null ? '' : start) + '-' + (endIncl === null ? '' : endIncl);
+  return fetch('/native/fs/spike0.bin', { headers: { 'Range': 'bytes=' + spec } });
+}
+
+async function run() {
+  // 1. full GET
+  try {
+    const r = await fetch('/native/fs/spike0.bin');
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const err = buf.length === SIZE ? (checkPattern(buf.subarray(0, 4096), 0) ||
+      checkPattern(buf.subarray(SIZE - 256), SIZE - 256)) : ('length ' + buf.length);
+    if (r.status === 200 && !err) report('pass', 'full GET — 200, 8 MiB, pattern ok');
+    else report('fail', 'full GET', 'status ' + r.status + ' ' + (err || ''));
+  } catch (e) { report('fail', 'full GET', String(e)); }
+
+  // 2. THE test — bytes=0-1023 → 206 + correct 1024 bytes
+  try {
+    const r = await ranged(0, 1023);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const cr = r.headers.get('Content-Range');
+    const err = buf.length !== 1024 ? ('length ' + buf.length) : checkPattern(buf, 0);
+    if (r.status === 206 && !err) report('pass', 'Range 0–1023 — 206, 1024 bytes, pattern ok', 'Content-Range: ' + cr);
+    else report('fail', 'Range 0–1023', 'status ' + r.status + ', len ' + buf.length + ', ' + (err || '') + ', Content-Range: ' + cr);
+  } catch (e) { report('fail', 'Range 0–1023', String(e)); }
+
+  // 3. mid-file range
+  try {
+    const r = await ranged(1048576, 1049599);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const err = buf.length !== 1024 ? ('length ' + buf.length) : checkPattern(buf, 1048576);
+    if (r.status === 206 && !err) report('pass', 'Range 1 MiB mark — 206, pattern ok');
+    else report('fail', 'Range 1 MiB mark', 'status ' + r.status + ' ' + (err || ''));
+  } catch (e) { report('fail', 'Range 1 MiB mark', String(e)); }
+
+  // 4. suffix range: last 1024 bytes
+  try {
+    const r = await ranged(null, 1024);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const err = buf.length !== 1024 ? ('length ' + buf.length) : checkPattern(buf, SIZE - 1024);
+    if (r.status === 206 && !err) report('pass', 'suffix Range (last 1024) — 206, pattern ok');
+    else report('fail', 'suffix Range', 'status ' + r.status + ' ' + (err || ''));
+  } catch (e) { report('fail', 'suffix Range', String(e)); }
+
+  // 5. open-ended range
+  try {
+    const r = await ranged(SIZE - 608, null);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const err = buf.length !== 608 ? ('length ' + buf.length) : checkPattern(buf, SIZE - 608);
+    if (r.status === 206 && !err) report('pass', 'open-ended Range — 206, 608 bytes');
+    else report('fail', 'open-ended Range', 'status ' + r.status + ' ' + (err || ''));
+  } catch (e) { report('fail', 'open-ended Range', String(e)); }
+
+  // 6. past EOF → 416
+  try {
+    const r = await ranged(9000000, null);
+    if (r.status === 416) report('pass', 'past-EOF Range — 416', 'Content-Range: ' + r.headers.get('Content-Range'));
+    else report('fail', 'past-EOF Range', 'status ' + r.status + ' (want 416)');
+  } catch (e) { report('fail', 'past-EOF Range', String(e)); }
+
+  // 7. throughput: 32 × 256 KiB ranged reads (8 MiB total)
+  try {
+    const t0 = performance.now();
+    for (let i = 0; i < 32; i++) {
+      const start = i * 256 * 1024;
+      const r = await ranged(start, start + 256 * 1024 - 1);
+      await r.arrayBuffer();
+    }
+    const ms = performance.now() - t0;
+    report('info', 'throughput: 8 MiB in 32 ranged reads', (8 / (ms / 1000)).toFixed(1) + ' MB/s (' + ms.toFixed(0) + ' ms)');
+  } catch (e) { report('fail', 'throughput', String(e)); }
+
+  // 8. custom request header visibility
+  try {
+    const r = await fetch('/native/fs/echo', { headers: { 'X-Spike': '42' } });
+    const j = await r.json();
+    const seen = Object.keys(j.headers).find(k => k.toLowerCase() === 'x-spike');
+    if (seen) report('pass', 'custom request header crosses the bridge', 'X-Spike seen by Kotlin');
+    else report('fail', 'custom request header', 'X-Spike NOT in ' + Object.keys(j.headers).join(', '));
+  } catch (e) { report('fail', 'header echo', String(e)); }
+
+  // 9. POST body probe — expected absent (crbug 155250); recorded, not judged
+  try {
+    const r = await fetch('/native/fs/echo', { method: 'POST', body: 'hello-body',
+      headers: { 'Content-Type': 'text/plain' } });
+    const j = await r.json();
+    report('info', 'POST through the bridge — method=' + j.method,
+      'request bodies are not observable via shouldInterceptRequest (known Chromium limit); ' +
+      'headers seen: ' + Object.keys(j.headers).join(', '));
+  } catch (e) { report('fail', 'POST probe', String(e)); }
+
+  // 10. unknown route → 404
+  try {
+    const r = await fetch('/native/nope/x');
+    if (r.status === 404) report('pass', 'unknown plugin — 404');
+    else report('fail', 'unknown plugin', 'status ' + r.status);
+  } catch (e) { report('fail', 'unknown plugin', String(e)); }
+
+  const fails = results.filter(r => r === 'fail').length;
+  const v = document.getElementById('verdict');
+  if (fails === 0) { v.className = 'ok'; v.textContent = 'SPIKE 0 PASSES — the thesis holds. ' + results.filter(r => r === 'pass').length + ' pass, 0 fail.'; }
+  else { v.className = 'bad'; v.textContent = 'SPIKE 0 FAILS — ' + fails + ' failing. See above; fall back to SPEC §4.3.'; }
+
+  // environment (SPEC Q-1)
+  document.getElementById('env').textContent =
+    'webgl2: ' + (!!document.createElement('canvas').getContext('webgl2')) +
+    ' · webgpu: ' + ('gpu' in navigator) +
+    ' · ' + navigator.userAgent;
+}
+run();
+</script>
+</body>
+</html>

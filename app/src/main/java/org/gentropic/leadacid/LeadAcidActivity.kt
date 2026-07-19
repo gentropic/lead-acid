@@ -1,0 +1,131 @@
+package org.gentropic.leadacid
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
+import java.io.File
+
+/**
+ * The trench coat (SPEC §3). Spike-0 edition: WebView + asset loading +
+ * "/native/…" interceptor + one registered plugin. An app subclasses this to
+ * declare its plugin list; the spike declares FilePlugin inline.
+ * (Kotlin block comments NEST — never write /native/ followed by two stars in a comment.)
+ */
+class LeadAcidActivity : Activity() {
+
+    companion object {
+        const val ORIGIN = "appassets.androidplatform.net"
+        /** 8 MiB, byte[i] = i mod 251 — verifiable from JS at any offset. */
+        const val TEST_FILE_SIZE = 8L * 1024 * 1024
+    }
+
+    private lateinit var webView: WebView
+    private val plugins = HashMap<String, Plugin>()
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val testFile = File(filesDir, "spike0.bin").also(::ensureTestFile)
+        register(FilePlugin(mapOf("spike0.bin" to testFile)))
+
+        val assetLoader = WebViewAssetLoader.Builder()
+            .setDomain(ORIGIN)
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
+        webView = WebView(this)
+        webView.settings.apply {
+            javaScriptEnabled = true
+            // SPEC §8: all file service goes through the fs plugin's routes.
+            allowFileAccess = false
+            allowContentAccess = false
+        }
+        webView.webViewClient = object : WebViewClientCompat() {
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): WebResourceResponse? {
+                val url = request.url
+                if (url.host != ORIGIN) return null
+                val path = url.path ?: return null
+                if (path.startsWith("/native/")) return dispatch(request, path)
+                return assetLoader.shouldInterceptRequest(url)
+            }
+
+            // SPEC §8: navigation locked to the virtual origin; external links
+            // go to the system browser.
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
+                if (request.url.host == ORIGIN) return false
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
+                return true
+            }
+        }
+        setContentView(webView)
+        webView.loadUrl("https://$ORIGIN/assets/artifact.html")
+    }
+
+    private fun register(plugin: Plugin) {
+        plugins[plugin.name] = plugin
+    }
+
+    /** /native/{plugin}/{subpath…} → PluginRegistry dispatch (SPEC §3). */
+    private fun dispatch(request: WebResourceRequest, path: String): WebResourceResponse {
+        val rest = path.removePrefix("/native/")
+        val slash = rest.indexOf('/')
+        val pluginName = if (slash < 0) rest else rest.substring(0, slash)
+        val subpath = if (slash < 0) "" else rest.substring(slash + 1)
+
+        val plugin = plugins[pluginName]
+            ?: return BridgeResponse.error(404, "Not Found", "no plugin: $pluginName").toWebResponse()
+
+        val query = HashMap<String, String>()
+        val uri: Uri = request.url
+        for (key in runCatching { uri.queryParameterNames }.getOrDefault(emptySet())) {
+            uri.getQueryParameter(key)?.let { query[key] = it }
+        }
+
+        val req = BridgeRequest(
+            method = request.method,
+            subpath = subpath,
+            query = query,
+            headers = request.requestHeaders ?: emptyMap(),
+        )
+        return try {
+            plugin.handle(req).toWebResponse()
+        } catch (e: Exception) {
+            BridgeResponse.error(500, "Internal Error", e.message ?: e.javaClass.simpleName)
+                .toWebResponse()
+        }
+    }
+
+    override fun onDestroy() {
+        webView.destroy()
+        super.onDestroy()
+    }
+
+    /** Deterministic pattern file: byte[i] = i mod 251 (largest prime < 256). */
+    private fun ensureTestFile(file: File) {
+        if (file.exists() && file.length() == TEST_FILE_SIZE) return
+        val chunk = ByteArray(64 * 1024)
+        file.outputStream().buffered().use { out ->
+            var written = 0L
+            while (written < TEST_FILE_SIZE) {
+                for (j in chunk.indices) chunk[j] = ((written + j) % 251).toByte()
+                val n = minOf(chunk.size.toLong(), TEST_FILE_SIZE - written).toInt()
+                out.write(chunk, 0, n)
+                written += n
+            }
+        }
+    }
+}
