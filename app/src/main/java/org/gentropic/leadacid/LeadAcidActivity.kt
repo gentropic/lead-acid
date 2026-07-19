@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.graphics.Color
+import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -27,6 +28,7 @@ class LeadAcidActivity : Activity() {
         const val ORIGIN = "appassets.androidplatform.net"
         /** 8 MiB, byte[i] = i mod 251 — verifiable from JS at any offset. */
         const val TEST_FILE_SIZE = 8L * 1024 * 1024
+        const val FILE_CHOOSER_REQ = 71
     }
 
     private lateinit var webView: WebView
@@ -36,6 +38,8 @@ class LeadAcidActivity : Activity() {
     private val debuggable: Boolean by lazy {
         (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
+
+    private var fileChooserCallback: android.webkit.ValueCallback<Array<Uri>>? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,13 +71,34 @@ class LeadAcidActivity : Activity() {
         // Chromium — the on-device dev loop.
         if (debuggable) WebView.setWebContentsDebuggingEnabled(true)
 
-        // Page console → logcat, so test results are readable over adb.
-        if (debuggable) {
-            webView.webChromeClient = object : android.webkit.WebChromeClient() {
-                override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
-                    android.util.Log.i("leadacidjs", m.message())
-                    return true
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            // Page console → logcat, so test results are readable over adb.
+            override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
+                if (debuggable) android.util.Log.i("leadacidjs", m.message())
+                return true
+            }
+
+            // SPEC §7c: file inputs silently no-op without this. SAF picker;
+            // ACTION_OPEN_DOCUMENT so the returned URIs are documents-provider
+            // backed (persistable grants + ranged reads later).
+            override fun onShowFileChooser(
+                view: WebView,
+                callback: android.webkit.ValueCallback<Array<Uri>>,
+                params: FileChooserParams,
+            ): Boolean {
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = callback
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    putExtra(
+                        Intent.EXTRA_ALLOW_MULTIPLE,
+                        params.mode == FileChooserParams.MODE_OPEN_MULTIPLE,
+                    )
                 }
+                return runCatching { startActivityForResult(intent, FILE_CHOOSER_REQ) }
+                    .onFailure { fileChooserCallback = null }
+                    .isSuccess
             }
         }
         webView.webViewClient = object : WebViewClientCompat() {
@@ -164,6 +189,22 @@ class LeadAcidActivity : Activity() {
             BridgeResponse.error(500, "Internal Error", e.message ?: e.javaClass.simpleName)
                 .toWebResponse()
         }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == FILE_CHOOSER_REQ) {
+            val cb = fileChooserCallback
+            fileChooserCallback = null
+            val uris = if (resultCode == RESULT_OK && data != null) {
+                data.clipData?.let { cd -> Array(cd.itemCount) { cd.getItemAt(it).uri } }
+                    ?: data.data?.let { arrayOf(it) }
+            } else null
+            cb?.onReceiveValue(uris)
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onDestroy() {
