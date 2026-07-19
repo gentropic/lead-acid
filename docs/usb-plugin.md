@@ -16,11 +16,12 @@ kernel serial node** (`/dev/ttyUSB*`) without root — the app implements the se
 userspace. Two ways:
 
 1. **Vendor `usb-serial-for-android` (recommended).** v3.11.0 (2026‑07), **MIT**, pure Java, zero
-   runtime deps, actively maintained; implements FTDI / CP210x / CH340‑341 / PL2303 / CDC‑ACM.
-   §1.5 says "no third‑party runtime deps beyond AndroidX" — so **vendor the source into the `usb`
-   module** (like bearing.js / acorn / cm6): in‑tree, auditable, no build‑time external repo, and
-   isolated to this one plugin module (an app without `usb` never sees it). This respects §1.5's
-   spirit while not reinventing four chipset drivers.
+   runtime deps, actively maintained; implements FTDI / CP210x / CH340‑341 / PL2303 / CDC‑ACM. It
+   passes the bar — maintained, permissive license, clean tree — so **vendor the source into the
+   `usb` module** (the normal GCU move: bearing.js / acorn / cm6 / hyparquet are all vendored this
+   way): in‑tree, auditable, no build‑time external repo, isolated to this one plugin (an app
+   without `usb` never sees it). Don't reinvent four chipset drivers out of misplaced purity —
+   §1.5's "no third‑party deps" is about avoiding heavy wrapper *frameworks*, not vetted libraries.
 2. **CDC‑ACM direct (the zero‑dep floor).** Standard USB‑serial (what a Pico/Arduino presents) is a
    documented USB class — ~200 lines to drive directly, no library. If we only ever needed CDC‑ACM
    we'd do this; the vendored library is the pragmatic choice because field adapters are commonly
