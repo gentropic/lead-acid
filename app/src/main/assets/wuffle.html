@@ -61,9 +61,12 @@
   .log { font:12px "Space Mono",monospace; }
   .log ol { list-style:none; margin:0; padding:0; max-height:26vh; overflow:auto; }
   .log li { padding:7px 10px; border-left:3px solid var(--blue); background:var(--card); margin:3px 0;
-    border-radius:0 6px 6px 0; display:flex; justify-content:space-between; }
+    border-radius:0 6px 6px 0; display:flex; align-items:center; gap:8px; }
   .log li b { color:var(--ink); font-weight:700; }
-  .log li span { color:var(--dim); }
+  .log li span { color:var(--dim); flex:1; }
+  .log li .del { flex:none; width:26px; height:26px; border:none; border-radius:6px; background:transparent;
+    color:var(--dim); font:400 18px system-ui; line-height:1; }
+  .log li .del:active { background:#2a1512; color:var(--red); }
   #msg { color:var(--dim); font-size:12px; margin-top:8px; min-height:16px; }
   .warn { color:var(--orange); }
 </style>
@@ -195,24 +198,41 @@ function onOrient(e) {
 window.addEventListener('deviceorientationabsolute', onOrient);
 window.addEventListener('deviceorientation', (e) => { if (!haveOrientation) onOrient(e); });
 
+function updateCount() {
+  $('count').textContent = log.length + ' measurement' + (log.length === 1 ? '' : 's');
+}
+// rebuild the log list from the array (newest first); each row deletes on tap-×
+function renderLog() {
+  const list = $('list'); list.innerHTML = '';
+  for (let k = log.length - 1; k >= 0; k--) {
+    const m = log[k];
+    const li = document.createElement('li');
+    const label = m.mode === 'plane'
+      ? `<b>${String(m.d1).padStart(3, '0')}/${String(m.d2).padStart(2, '0')}</b><span>plane · strike ${String(m.strike).padStart(3, '0')}</span>`
+      : `<b>${String(m.d1).padStart(3, '0')}→${String(m.d2).padStart(2, '0')}</b><span>line</span>`;
+    li.innerHTML = label + '<button class="del" aria-label="delete measurement">×</button>';
+    li.querySelector('.del').onclick = () => {
+      log.splice(k, 1); renderLog(); updateCount(); drawStatic();
+      if (navigator.vibrate) navigator.vibrate(10);
+    };
+    list.appendChild(li);
+  }
+}
+
+function record(d1, d2, m) {
+  log.push({ i: log.length + 1, mode: m, d1: fmt(d1), d2: Math.round(d2),
+    strike: m === 'plane' ? (fmt(d1) + 270) % 360 : null, ts: new Date().toISOString() });
+  renderLog(); updateCount(); drawStatic();
+}
+
 $('measure').onclick = () => {
   if (!cur) { msg('no orientation yet — tilt the phone', true); return; }
-  const strike = mode === 'plane' ? (fmt(cur.d1) + 270) % 360 : null;   // strike = dipdir - 90
-  const m = { i: log.length + 1, mode, d1: fmt(cur.d1), d2: Math.round(cur.d2), strike,
-    ts: new Date().toISOString() };
-  log.push(m);
-  const li = document.createElement('li');
-  li.innerHTML = mode === 'plane'
-    ? `<b>${String(m.d1).padStart(3,'0')}/${String(m.d2).padStart(2,'0')}</b><span>plane · strike ${String(strike).padStart(3,'0')}</span>`
-    : `<b>${String(m.d1).padStart(3,'0')}→${String(m.d2).padStart(2,'0')}</b><span>line</span>`;
-  $('list').prepend(li);
-  $('count').textContent = log.length + ' measurement' + (log.length === 1 ? '' : 's');
+  record(cur.d1, cur.d2, mode);
   if (navigator.vibrate) navigator.vibrate(15);
-  msg('measured ' + (mode === 'plane' ? m.d1 + '/' + m.d2 : m.d1 + '→' + m.d2));
-  drawStatic();
+  msg('measured ' + (mode === 'plane' ? fmt(cur.d1) + '/' + Math.round(cur.d2) : fmt(cur.d1) + '→' + Math.round(cur.d2)));
 };
 
-$('clear').onclick = () => { log.length = 0; $('list').innerHTML = ''; $('count').textContent = '0 measurements'; msg(''); drawStatic(); };
+$('clear').onclick = () => { log.length = 0; renderLog(); updateCount(); msg(''); drawStatic(); };
 
 $('publish').onclick = async () => {
   if (!log.length) { msg('nothing to publish', true); return; }
@@ -234,9 +254,7 @@ msg(shell.present ? 'lead-acid ready · lay the phone on a surface to measure' :
 console.log('[wuffle] present=' + shell.present);
 
 // debug hook (spike): plot without physical tilt
-window.__wuffle = { plot: (d1, d2, m) => { log.push({ i: log.length + 1, mode: m, d1, d2,
-  strike: m === 'plane' ? (d1 + 270) % 360 : null, ts: new Date().toISOString() }); drawStatic();
-  $('count').textContent = log.length + ' measurements'; } };
+window.__wuffle = { plot: (d1, d2, m) => record(d1, d2, m) };
 </script>
 </body>
 </html>
