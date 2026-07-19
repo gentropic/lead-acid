@@ -5,9 +5,12 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.graphics.Color
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import java.io.File
@@ -96,7 +99,26 @@ class LeadAcidActivity : Activity() {
                 return true
             }
         }
-        setContentView(webView)
+        // SPEC §7b: Android 15+ enforces edge-to-edge, and WebView does NOT
+        // populate env(safe-area-inset-*) (V-3 confirmed on-device) — so the
+        // shell's DEFAULT is to keep the artifact inside the system bars,
+        // cutout, and keyboard. Artifacts need zero inset awareness; true
+        // edge-to-edge becomes a per-artifact opt-in later (meta tag, per the
+        // spec). GOTCHA: WebView ignores its own padding — pad a CONTAINER.
+        webView.setBackgroundColor(Color.BLACK)
+        val root = android.widget.FrameLayout(this)
+        root.setBackgroundColor(Color.BLACK)
+        root.addView(webView)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars()
+                    or WindowInsetsCompat.Type.displayCutout()
+                    or WindowInsetsCompat.Type.ime(),
+            )
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        setContentView(root)
         // Dev switcher (debug builds): `adb shell am start … --es artifact micro.html`
         // loads a different asset without a rebuild. Release ignores the extra.
         val artifact = (if (debuggable) intent.getStringExtra("artifact") else null)
