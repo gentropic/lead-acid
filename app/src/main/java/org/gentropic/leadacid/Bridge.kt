@@ -8,11 +8,10 @@ import java.io.InputStream
  * The bridge contract (SPEC §4.1).
  *
  * A plugin owns one path segment under /native/ and answers request/reply calls.
- * Note: WebResourceRequest carries NO request body (long-standing Chromium
- * limitation, crbug 155250) — `handle` receives method + subpath + query +
- * headers only. Spike 0 records this; body-carrying calls are a design item
- * for M0 (candidates: WebMessagePort per SPEC §4.3, or body-in-header for
- * small JSON).
+ * WebResourceRequest carries NO request body (Chromium crbug 155250) — so bodies
+ * ride the WebMessagePort sidecar (SPEC §4.3): the artifact posts [id | bytes]
+ * over the port, tags the fetch with X-LeadAcid-Body-Id, and the shell joins the
+ * two, delivering `req.body`. `shell.native({body})` hides all of this.
  */
 interface Plugin {
     /** Path segment after /native/, e.g. "fs". */
@@ -26,6 +25,8 @@ class BridgeRequest(
     val subpath: String,
     val query: Map<String, String>,
     val headers: Map<String, String>,
+    /** Request body, joined from the port sidecar; null if the call carried none. */
+    val body: ByteArray? = null,
 ) {
     /** Case-insensitive header lookup. */
     fun header(name: String): String? =

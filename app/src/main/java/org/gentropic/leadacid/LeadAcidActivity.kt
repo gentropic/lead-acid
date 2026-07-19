@@ -19,9 +19,16 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebMessageCompat
+import androidx.webkit.WebMessagePortCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * The trench coat (SPEC §3). Spike-0 edition: WebView + asset loading +
@@ -49,7 +56,9 @@ class LeadAcidActivity : ComponentActivity() {
     private var fileChooserCallback: android.webkit.ValueCallback<Array<Uri>>? = null
 
     /** The fs plugin — created once so it can hold SAF-fd maps across requests. */
-    private val filePlugin by lazy { FilePlugin(mapOf("spike0.bin" to File(filesDir, "spike0.bin"))) }
+    private val filePlugin by lazy {
+        FilePlugin(mapOf("spike0.bin" to File(filesDir, "spike0.bin")), ::publishToMediaStore)
+    }
 
     /** Fullscreen (§7c): the custom view an artifact hands us via onShowCustomView. */
     private var customView: View? = null
@@ -59,6 +68,13 @@ class LeadAcidActivity : ComponentActivity() {
 
     private val PERM_LOCATION = 81
     private val PERM_CAMERA = 82
+
+    // The WebMessagePort body sidecar (SPEC §4.3). The page posts [id(12) | body]
+    // over the port; the interceptor (off-thread) awaits the id's bytes here.
+    private var shellPort: WebMessagePortCompat? = null
+    private val bodyById = ConcurrentHashMap<String, CompletableFuture<ByteArray>>()
+    private val BODY_ID_LEN = 12
+    private val BODY_HEADER = "X-LeadAcid-Body-Id"
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -204,6 +220,12 @@ class LeadAcidActivity : ComponentActivity() {
             // opens don't leak. Built-in tokens survive.
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 filePlugin.releaseSaf()
+                shellPort = null
+                bodyById.clear()
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                establishBodyPort()
             }
 
             override fun shouldInterceptRequest(
@@ -275,11 +297,17 @@ class LeadAcidActivity : ComponentActivity() {
             uri.getQueryParameter(key)?.let { query[key] = it }
         }
 
+        val headers = request.requestHeaders ?: emptyMap()
+        // Body sidecar (§4.3): a tagged call waits for its bytes on the port.
+        val bodyId = headers.entries.firstOrNull { it.key.equals(BODY_HEADER, true) }?.value
+        val body = bodyId?.let { awaitBody(it) }
+
         val req = BridgeRequest(
             method = request.method,
             subpath = subpath,
             query = query,
-            headers = request.requestHeaders ?: emptyMap(),
+            headers = headers,
+            body = body,
         )
         return try {
             val res = plugin.handle(req)
@@ -312,6 +340,79 @@ class LeadAcidActivity : ComponentActivity() {
         }
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    /**
+     * SPEC §4.3: hand the page one end of a WebMessagePort. The page posts
+     * [id(12 ascii bytes) | body] as an ArrayBuffer; we split, and complete the
+     * future the interceptor is waiting on. `window.__leadacid_port` receives it.
+     */
+    private fun establishBodyPort() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.CREATE_WEB_MESSAGE_CHANNEL) ||
+            !WebViewFeature.isFeatureSupported(WebViewFeature.POST_WEB_MESSAGE) ||
+            !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)
+        ) return
+
+        val (mine, theirs) = WebViewCompat.createWebMessageChannel(webView)
+        mine.setWebMessageCallback(object : WebMessagePortCompat.WebMessageCallbackCompat() {
+            override fun onMessage(port: WebMessagePortCompat, message: WebMessageCompat?) {
+                val bytes = message?.arrayBuffer ?: return
+                if (bytes.size < BODY_ID_LEN) return
+                val id = String(bytes, 0, BODY_ID_LEN, Charsets.US_ASCII)
+                val body = bytes.copyOfRange(BODY_ID_LEN, bytes.size)
+                bodyById.getOrPut(id) { CompletableFuture() }.complete(body)
+            }
+        })
+        shellPort = mine
+        // Deliver `theirs` to the page as a transferred port.
+        WebViewCompat.postWebMessage(
+            webView,
+            WebMessageCompat("__leadacid_port", arrayOf(theirs)),
+            Uri.parse("https://$ORIGIN"),
+        )
+    }
+
+    /** Block (briefly) for the sidecar body tagged with this id. */
+    private fun awaitBody(id: String): ByteArray? =
+        try {
+            bodyById.getOrPut(id) { CompletableFuture() }.get(5, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            null
+        } finally {
+            bodyById.remove(id)
+        }
+
+    /**
+     * fs/publish backend (SPEC §5.1): insert bytes into a public MediaStore
+     * collection. Scoped-storage (API 29+) — own-contributions need NO storage
+     * permission, and the file survives uninstall + shows in Files/Gallery.
+     */
+    private fun publishToMediaStore(name: String, collection: String, mime: String, bytes: ByteArray): String? {
+        val (target, relPath) = when (collection.lowercase()) {
+            "pictures", "photos", "images" ->
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI to android.os.Environment.DIRECTORY_PICTURES
+            "documents", "docs" ->
+                android.provider.MediaStore.Files.getContentUri("external") to android.os.Environment.DIRECTORY_DOCUMENTS
+            else ->
+                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI to android.os.Environment.DIRECTORY_DOWNLOADS
+        }
+        return try {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(target, values) ?: return null
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            values.clear()
+            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            uri.toString()
+        } catch (e: Exception) {
+            android.util.Log.e("leadacid", "publishToMediaStore failed", e)
+            null
+        }
     }
 
     private fun hasPermission(perm: String) =

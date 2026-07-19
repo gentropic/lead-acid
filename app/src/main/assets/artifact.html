@@ -39,6 +39,13 @@
 
 <div class="env" id="env"></div>
 
+<!-- Import the shell module EARLY (deferred, before onPageFinished) so its
+     port listener is registered when the shell posts the WebMessagePort. -->
+<script type="module">
+  import { shell } from './lead-acid.js';
+  window.__shell = shell;
+</script>
+
 <script>
 const SIZE = 8 * 1024 * 1024;
 const out = document.getElementById('out');
@@ -162,6 +169,22 @@ async function run() {
     if (r.status === 404) report('pass', 'unknown plugin — 404');
     else report('fail', 'unknown plugin', 'status ' + r.status);
   } catch (e) { report('fail', 'unknown plugin', String(e)); }
+
+  // 11b. §4.3 body sidecar + fs/publish: publish a known payload, verify uri.
+  try {
+    const shell = window.__shell || (await import('./lead-acid.js')).shell;
+    if (!shell.present) { report('fail', 'fs/publish', 'shell not present'); }
+    else {
+      // 4 KiB pattern payload: byte[i] = (i*7+3) mod 251 — checkable off-device.
+      const n = 4096, payload = new Uint8Array(n);
+      for (let i = 0; i < n; i++) payload[i] = (i * 7 + 3) % 251;
+      const res = await shell.publish('leadacid-publish-test.bin', payload,
+        { collection: 'Downloads', mime: 'application/octet-stream' });
+      const ok = res && res.uri && res.bytes === n;
+      report(ok ? 'pass' : 'fail', 'fs/publish (body sidecar → MediaStore)',
+        'bytes ' + (res && res.bytes) + ' · uri ' + (res && res.uri));
+    }
+  } catch (e) { report('fail', 'fs/publish', String(e)); }
 
   // 11. §7c shell controls: keepawake route + shell/info
   try {

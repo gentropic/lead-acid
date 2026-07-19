@@ -14,10 +14,53 @@
 export const shell = (() => {
   const present = typeof __leadacid !== 'undefined';
 
-  // request/reply. opts.body rides the WebMessagePort sidecar (SPEC §4.3) —
-  // hidden here so callers pass {body} as if fetch carried it. (Sidecar wiring
-  // lands with the first body-carrying plugin; GET/query/header calls work now.)
-  const native = (path, opts) => fetch('/native/' + path, opts);
+  // The body sidecar (SPEC §4.3): the shell posts one WebMessagePort to the
+  // page as `__leadacid_port`. We post [id(12 ascii) | body] as an ArrayBuffer,
+  // then fetch with the id in a header; the shell joins them into req.body.
+  // portReady is a PROMISE so a body-carrying call before the port arrives just
+  // awaits it — no race regardless of when the module loads vs onPageFinished.
+  let resolvePort;
+  const portReady = present ? new Promise((r) => { resolvePort = r; }) : Promise.resolve(null);
+  if (present) {
+    window.addEventListener('message', (e) => {
+      if (e.data === '__leadacid_port' && e.ports && e.ports[0]) resolvePort(e.ports[0]);
+    });
+  }
+  let bodySeq = 0;
+  function newBodyId() {
+    // 12 ascii chars, unique per call
+    const s = (Date.now().toString(36) + (bodySeq++).toString(36) + '00000000000').slice(0, 12);
+    return s;
+  }
+  function sendBody(port, id, bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes
+      : bytes instanceof ArrayBuffer ? new Uint8Array(bytes)
+        : new TextEncoder().encode(typeof bytes === 'string' ? bytes : JSON.stringify(bytes));
+    const buf = new Uint8Array(12 + u8.length);
+    for (let i = 0; i < 12; i++) buf[i] = id.charCodeAt(i);
+    buf.set(u8, 12);
+    port.postMessage(buf.buffer, [buf.buffer]);
+  }
+
+  // request/reply. opts.body rides the port sidecar — hidden here so callers
+  // pass {body} as if fetch carried it. Bodyless calls are plain fetch.
+  async function native(path, opts) {
+    if (opts && opts.body != null) {
+      const port = await portReady;
+      if (port) {
+        const id = newBodyId();
+        const { body, headers, ...rest } = opts;
+        // Post the body FIRST so the shell has it (or is about to) when the
+        // tagged fetch lands; the shell's awaitBody() tolerates either order.
+        sendBody(port, id, body);
+        return fetch('/native/' + path, {
+          ...rest,
+          headers: { ...(headers || {}), 'X-LeadAcid-Body-Id': id },
+        });
+      }
+    }
+    return fetch('/native/' + path, opts);
+  }
   const stream = (path) => new EventSource('/native/' + path);
 
   async function version() {
@@ -28,6 +71,15 @@ export const shell = (() => {
 
   const keepAwake = (on = true) =>
     native('shell/keepawake?on=' + (on ? 'true' : 'false'), { method: 'POST' });
+
+  // Publish a finished output into a public collection (Downloads/Pictures/
+  // Documents) — survives uninstall, visible to other apps. Body via §4.3 port.
+  async function publish(name, bytes, { collection = 'Downloads', mime = 'application/octet-stream' } = {}) {
+    const q = `?name=${encodeURIComponent(name)}&collection=${encodeURIComponent(collection)}&mime=${encodeURIComponent(mime)}`;
+    const r = await native('fs/publish' + q, { method: 'POST', body: bytes });
+    if (!r.ok) throw new Error('publish failed: ' + r.status);
+    return r.json();   // { uri, name, bytes }
+  }
 
   // Registered fs tokens (SAF picks + built-ins): [{token, size}]
   async function files() {
@@ -76,5 +128,5 @@ export const shell = (() => {
     };
   }
 
-  return { present, native, stream, version, keepAwake, files, fileSource, fsBackend };
+  return { present, native, stream, version, keepAwake, publish, files, fileSource, fsBackend };
 })();

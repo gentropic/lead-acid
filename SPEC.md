@@ -138,12 +138,17 @@ pipe that exists only if needed"; Spike 0 promoted it — request bodies never c
 interceptor, and more than half the catalog's calls carry one (`fs/publish`, `nn/run`,
 `print`, `widget/state`, `worker/schedule`, …). Two uses:
 
-- **Body sidecar (uniform, all sizes).** `shell.native(path, {body})` sends the body over the
-  port as an ArrayBuffer tagged with a request id, then issues the fetch carrying the id in a
-  header; the shell joins the two (the interceptor thread waits briefly on the id). The fetch
-  remains the spine — routing, status codes, §4.6 error semantics all unchanged — and the
-  artifact never sees the seam. One mechanism for a 200-byte JSON and a 40 MB DNG alike: no
-  base64, no size cliff, binary crosses as binary at memory-copy speed.
+- **Body sidecar (uniform, all sizes) — BUILT + validated 2026-07-19.** `shell.native(path,
+  {body})` sends `[id(12 ascii) | body]` over the port as an ArrayBuffer, then issues the fetch
+  carrying the id in `X-LeadAcid-Body-Id`; the shell's port callback stashes the bytes by id and
+  the interceptor thread awaits them (a `ConcurrentHashMap<id, CompletableFuture>` that tolerates
+  either arrival order, 5 s timeout). The fetch remains the spine — routing, status codes, §4.6
+  error semantics all unchanged — and the artifact never sees the seam. One mechanism for a
+  200-byte JSON and a 40 MB DNG alike: no base64, no size cliff, binary crosses as binary. The
+  port is delivered on `onPageFinished` via `WebViewCompat.postWebMessage`; `lead-acid.js` holds
+  it as a **promise** so a body call before the port arrives just awaits it (no load-order race).
+  First user: `fs/publish` — verified byte-exact end to end (JS Uint8Array → port → MediaStore →
+  Downloads).
 - **Binary push streams.** High-rate native→JS data (UNPROCESSED audio frames,
   SensorDirectChannel IMU batches) streams as ArrayBuffers over a port channel the plugin
   opens; SSE stays for low-rate JSON events (§4 assignment rule).

@@ -23,7 +23,11 @@ import java.nio.channels.FileChannel
  * segments map, and each map is < 2 GiB. SAF documents keep their fd open for the
  * source's lifetime; `releaseSaf` closes them (page-generation lifecycle).
  */
-class FilePlugin(files: Map<String, java.io.File>) : Plugin {
+class FilePlugin(
+    files: Map<String, java.io.File>,
+    /** name, collection, mime, bytes → the resulting content:// URI, or null. */
+    private val publisher: ((String, String, String, ByteArray) -> String?)? = null,
+) : Plugin {
     override val name = "fs"
 
     private val sources = HashMap<String, Source>()
@@ -131,6 +135,7 @@ class FilePlugin(files: Map<String, java.io.File>) : Plugin {
     override fun handle(req: BridgeRequest): BridgeResponse {
         if (req.subpath == "echo") return echo(req)
         if (req.subpath == "list") return list()
+        if (req.subpath == "publish") return publish(req)
 
         val src = synchronized(this) { sources[req.subpath] }
             ?: return BridgeResponse.error(404, "Not Found", "unknown token: ${req.subpath}")
@@ -194,6 +199,29 @@ class FilePlugin(files: Map<String, java.io.File>) : Plugin {
                 if (start >= total || end < start) null else Pair(start, minOf(end, total - 1))
             }
         }
+    }
+
+    /**
+     * POST /native/fs/publish?name=&collection=&mime= — insert a finished output
+     * into a public MediaStore collection (survives uninstall, visible to other
+     * apps). The body rides the §4.3 port sidecar. SPEC §5.1 fs.publish.
+     */
+    private fun publish(req: BridgeRequest): BridgeResponse {
+        if (req.method != "POST")
+            return BridgeResponse.error(405, "Method Not Allowed", req.method)
+        val bytes = req.body
+            ?: return BridgeResponse.error(400, "Bad Request", "no body (port sidecar delivered nothing)")
+        val pub = publisher
+            ?: return BridgeResponse.error(503, "Not Available", "no publisher on this host")
+        val name = req.query["name"] ?: "leadacid-output"
+        val collection = req.query["collection"] ?: "Downloads"
+        val mime = req.query["mime"] ?: "application/octet-stream"
+        val uri = pub(name, collection, mime, bytes)
+            ?: return BridgeResponse.error(500, "Publish Failed", "MediaStore insert returned null")
+        return BridgeResponse.json(
+            200, "OK",
+            """{"uri":${BridgeResponse.jsonStr(uri)},"name":${BridgeResponse.jsonStr(name)},"bytes":${bytes.size}}""",
+        )
     }
 
     @Synchronized
