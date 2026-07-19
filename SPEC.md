@@ -249,7 +249,7 @@ Kept for their design content, not as a plan.
 |---|---|---|
 | `hid` | `POST /native/hid/report`, `stream` (state) | BLE HID peripheral via `BluetoothHidDevice` (RelayKVM: phone as controller+bridge, or as software-defined relay — NUS GATT server in, HID out; dual-peripheral operation is a per-device verification item) |
 | `nn` | `POST /native/nn/{model}/run` | LiteRT, best-available delegate (NPU→GPU→CPU). SDK 37+: NPU access (including the LiteRT NPU delegate) requires declaring `FEATURE_NEURAL_PROCESSING_UNIT` in the manifest — joins the plugin's permission merge |
-| `usb` | enumerate, claim, transfer | USB host / OTG serial |
+| `usb` | enumerate, claim, transfer | USB host / OTG serial — full design in `docs/usb-plugin.md` (vendor usb-serial-for-android v3.11.0 MIT into the module; per-device permission, no dangerous runtime perm; read = port push stream, write = body sidecar). Wired sibling of `ble`/`spp` |
 | `grip` | `stream` (inputs), `POST display` | Composite HID+CDC device (see grip project) |
 | `audio` | `stream?src=unprocessed`, `record` | AudioRecord UNPROCESSED source, exact sample timestamps (hammer seismics, acoustic experiments). Frames push on the port lane (§4) — binary at machine rate is not SSE's job |
 | `nfc` | `stream` (tag taps), `write` | Tap-to-log sample chain-of-custody: tag ID + GPS + timestamp |
