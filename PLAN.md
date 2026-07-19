@@ -159,6 +159,17 @@ bytes and Content-Range, 416 past-EOF), 62 MB/s over 32 sequential 256 KiB range
 4. **Environment:** WebGL2 true, **WebGPU true** (Q-1 answered on WebView 150), Content-Length
    on intercepted responses is ignored by the renderer (set it truthfully anyway).
 
+**SAF RANDOM-ACCESS PROBE (2026-07-19, S24+): O(1) — resolves the /native/fs-vs-Blob fork.**
+`Blob.slice(off, off+64KiB)` on a SAF `ACTION_OPEN_DOCUMENT` File is flat in the offset
+(47–80 ms at 0/128/256/384/511 MiB into a 512 MiB file; far read fastest; bytes correct
+everywhere). So **micro/lamina open big files off phone storage UNMODIFIED and Sealed — no
+`/native/fs` needed for correctness.** BUT: each SAF slice costs ~50–80 ms (content-provider
+round-trip latency), and scattered small reads managed only **1.2 MB/s** — vs the mmap ranged
+path's **65 MB/s** (Spike 0). So `/native/fs` is a **~50× latency optimization**, not a
+capability. Rule: few-hundred-MB → SAF (artifact untouched); multi-GB latency-sensitive
+streaming (micro's LOD-read pattern) → wire `/native/fs`. The fs plugin thus graduates from
+"maybe needed for M0" to "the perf path, wired when a model is big enough to feel it."
+
 ### M0 — the trench coat *(I write the Kotlin; you build+run)*
 
 `LeadAcidActivity` + asset loader + interceptor + `PluginRegistry` + the ranged `FilePlugin`

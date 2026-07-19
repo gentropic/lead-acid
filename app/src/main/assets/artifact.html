@@ -31,6 +31,12 @@
 <p class="sub">ranged fetch through shouldInterceptRequest, off mmap</p>
 <div id="out"></div>
 <div id="verdict">running…</div>
+
+<h1 style="margin-top:22px">SAF random-access probe</h1>
+<p class="sub">pick a big pattern file (byte[i] = i mod 251) from Downloads — times Blob.slice at rising offsets</p>
+<input type="file" id="pick" style="margin:6px 0 10px">
+<div id="saf"></div>
+
 <div class="env" id="env"></div>
 
 <script>
@@ -169,6 +175,69 @@ async function run() {
     ' · ' + navigator.userAgent;
 }
 run();
+
+// --- SAF random-access probe -------------------------------------------
+// The /native/fs-vs-Blob fork: is Blob.slice(off, off+k) on a SAF-backed
+// File O(1) in the offset (true random access) or O(off) (streams to it)?
+// Pattern file byte[i] = i mod 251 lets us verify AND time each read.
+const safOut = document.getElementById('saf');
+function safReport(kind, name, detail) {
+  const d = document.createElement('div');
+  d.className = 'test ' + kind;
+  d.innerHTML = '<b>' + kind.toUpperCase() + '</b> ' + name +
+    (detail ? '<div class="detail">' + detail + '</div>' : '');
+  safOut.appendChild(d);
+  console.log('[saf] ' + kind.toUpperCase() + ' | ' + name + (detail ? ' | ' + detail : ''));
+}
+async function sliceBytes(file, start, len) {
+  return new Uint8Array(await file.slice(start, start + len).arrayBuffer());
+}
+function patternErr(buf, off) {
+  for (let i = 0; i < buf.length; i++)
+    if (buf[i] !== (off + i) % 251) return 'byte ' + i + ' got ' + buf[i] + ' want ' + ((off + i) % 251);
+  return null;
+}
+document.getElementById('pick').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  safOut.innerHTML = '';
+  safReport('info', file.name, (file.size / 1048576).toFixed(1) + ' MiB');
+  const K = 64 * 1024;
+  const size = file.size;
+  // offsets from front to back; if slicing is O(offset) the far reads balloon
+  const marks = [0, 0.25, 0.5, 0.75, 0.999].map(f => Math.min(size - K, Math.floor(size * f)));
+  const times = [];
+  for (const off of marks) {
+    const reps = 5; let best = Infinity, bad = null;
+    for (let r = 0; r < reps; r++) {
+      const t = performance.now();
+      const buf = await sliceBytes(file, off, K);
+      const dt = performance.now() - t;
+      if (dt < best) best = dt;
+      bad = bad || patternErr(buf, off);
+    }
+    times.push(best);
+    safReport(bad ? 'fail' : 'pass',
+      'slice @ ' + (off / 1048576).toFixed(0) + ' MiB',
+      (bad ? bad : 'bytes ok') + ' · ' + best.toFixed(2) + ' ms/64KiB (best of ' + reps + ')');
+  }
+  // scattered random reads → effective random-access throughput
+  const t0 = performance.now();
+  let rbad = null;
+  for (let i = 0; i < 64; i++) {
+    const off = Math.min(size - K, Math.floor((i * 2654435761 % 1000) / 1000 * size));
+    rbad = rbad || patternErr(await sliceBytes(file, off, K), off);
+  }
+  const rms = performance.now() - t0;
+  safReport(rbad ? 'fail' : 'info', '64 scattered 64-KiB reads',
+    (rbad ? rbad : (64 * K / 1048576 / (rms / 1000)).toFixed(1) + ' MB/s · ' + rms.toFixed(0) + ' ms'));
+  // verdict: does cost scale with offset?
+  const ratio = times[times.length - 1] / Math.max(0.01, times[0]);
+  safReport(ratio < 4 ? 'pass' : 'fail', 'random-access verdict',
+    'far/near slice time ratio = ' + ratio.toFixed(1) + 'x — ' +
+    (ratio < 4 ? 'O(1): SAF Blob.slice is real random access; /native/fs is an optimization'
+               : 'O(offset): SAF streams to the offset; /native/fs earns its place for big files'));
+});
 </script>
 </body>
 </html>
