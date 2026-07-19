@@ -49,6 +49,10 @@ class LeadAcidActivity : Activity() {
         webView = WebView(this)
         webView.settings.apply {
             javaScriptEnabled = true
+            // WebView defaults DOM storage OFF — localStorage is literally null
+            // without this, and artifacts die at boot (micro did; found by the
+            // canary). A shell-core obligation, not a per-app choice.
+            domStorageEnabled = true
             // SPEC §8: all file service goes through the fs plugin's routes.
             allowFileAccess = false
             allowContentAccess = false
@@ -93,7 +97,11 @@ class LeadAcidActivity : Activity() {
             }
         }
         setContentView(webView)
-        webView.loadUrl("https://$ORIGIN/assets/artifact.html")
+        // Dev switcher (debug builds): `adb shell am start … --es artifact micro.html`
+        // loads a different asset without a rebuild. Release ignores the extra.
+        val artifact = (if (debuggable) intent.getStringExtra("artifact") else null)
+            ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]+")) } ?: "artifact.html"
+        webView.loadUrl("https://$ORIGIN/assets/$artifact")
     }
 
     private fun register(plugin: Plugin) {
