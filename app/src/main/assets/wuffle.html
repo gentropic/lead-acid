@@ -90,7 +90,7 @@
 <div id="msg"></div>
 
 <script type="module">
-import { compass, Stereonet } from './bearing.js';
+import { compass, Stereonet, conversions, curves } from './bearing.js';
 import { shell } from './lead-acid.js';
 
 const $ = id => document.getElementById(id);
@@ -105,27 +105,57 @@ if (shell.present) shell.keepAwake(true);
 // the Schmidt net (equal-area is the structural-geology convention; the name
 // puns on Wulff but orientation data belongs on an equal-area net)
 const sn = new Stereonet({ projection: 'equal-area', size: 340, classPrefix: 'sn' });
-$('netHost').appendChild(sn.element());
+const svg = sn.element();
+$('netHost').appendChild(svg);
 sn.render();
 
 const OR = { stroke: '#c8722e', fill: '#c8722e' };   // measured plane
 const BL = { stroke: '#4a7fb5', fill: '#4a7fb5' };   // measured line
-const GH = { stroke: '#5a626a', fill: '#5a626a' };   // live preview (ghost)
 
-function plotAll() {
+// SMOOTHNESS: sn.render() re-projects the whole graticule + every measured item
+// each call — fine when data changes (measure/clear), far too heavy at 60 Hz.
+// The moving live-preview rides a SEPARATE overlay (one <path> + one dot) that
+// we update per frame WITHOUT any sn.render() — bearing's render only runs when
+// the static picture actually changes. The overlay survives render() (it updates
+// specific elements, never wipes the SVG).
+const NS = 'http://www.w3.org/2000/svg';
+const livePath = document.createElementNS(NS, 'path');
+livePath.setAttribute('fill', 'none'); livePath.setAttribute('stroke', '#7a828a');
+livePath.setAttribute('stroke-width', '2'); livePath.setAttribute('stroke-dasharray', '5 4');
+const liveDot = document.createElementNS(NS, 'circle');
+liveDot.setAttribute('fill', '#7a828a'); liveDot.setAttribute('r', '0');
+svg.appendChild(livePath); svg.appendChild(liveDot);
+
+// static layer: only redrawn when the measurement set changes
+function drawStatic() {
   sn.clear();
   for (const m of log) {
     if (m.mode === 'plane') sn.plane(m.d1, m.d2, OR);
     else sn.line(m.d1, m.d2, BL);
   }
-  if (cur) {   // faint live preview of the current reading
-    if (mode === 'plane') sn.plane(fmt(cur.d1), Math.round(cur.d2), GH);
-    else sn.line(fmt(cur.d1), Math.round(cur.d2), GH);
-  }
   sn.render();
+  svg.appendChild(livePath); svg.appendChild(liveDot);   // keep overlay on top
 }
-let netTimer = 0;
-function plotThrottled() { if (!netTimer) netTimer = setTimeout(() => { netTimer = 0; plotAll(); }, 120); }
+
+// live preview: reuse bearing's exact projection (planeToDcos + greatCircle +
+// _projectCurve) so the ghost matches how a measured plane will land.
+function liveTrace() {
+  if (!cur) { livePath.setAttribute('d', ''); liveDot.setAttribute('r', '0'); return; }
+  if (mode === 'plane') {
+    const pole = conversions.planeToDcos(fmt(cur.d1), cur.d2);
+    let d = '';
+    for (const seg of sn._projectCurve(curves.greatCircle(pole, 180))) {
+      if (seg.length > 1) d += 'M' + seg.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('L');
+    }
+    livePath.setAttribute('d', d); liveDot.setAttribute('r', '0');
+  } else {
+    const p = sn.projectLine(fmt(cur.d1), cur.d2);
+    liveDot.setAttribute('cx', p.x); liveDot.setAttribute('cy', p.y); liveDot.setAttribute('r', '5');
+    livePath.setAttribute('d', '');
+  }
+}
+let raf = 0;
+function requestLive() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; liveTrace(); }); }
 
 function fmt(n) { return (Math.round(n) % 360 + 360) % 360; }
 function setMode(m) {
@@ -134,6 +164,7 @@ function setMode(m) {
   $('mLine').classList.toggle('on', m === 'line');
   $('l1').textContent = m === 'plane' ? 'dip direction' : 'trend';
   $('l2').textContent = m === 'plane' ? 'dip' : 'plunge';
+  requestLive();
 }
 $('mPlane').onclick = () => setMode('plane');
 $('mLine').onclick = () => setMode('line');
@@ -149,7 +180,7 @@ function onOrient(e) {
   $('v1').innerHTML = fmt(d1) + '<small>°</small>';
   $('v2').innerHTML = Math.round(d2) + '<small>°</small>';
   $('lvl').style.width = Math.min(100, (d2 / 90) * 100) + '%';
-  plotThrottled();
+  requestLive();
 }
 // absolute frame carries a compass-referenced alpha (Android); fall back.
 window.addEventListener('deviceorientationabsolute', onOrient);
@@ -169,10 +200,10 @@ $('measure').onclick = () => {
   $('count').textContent = log.length + ' measurement' + (log.length === 1 ? '' : 's');
   if (navigator.vibrate) navigator.vibrate(15);
   msg('measured ' + (mode === 'plane' ? m.d1 + '/' + m.d2 : m.d1 + '→' + m.d2));
-  plotAll();
+  drawStatic();
 };
 
-$('clear').onclick = () => { log.length = 0; $('list').innerHTML = ''; $('count').textContent = '0 measurements'; msg(''); plotAll(); };
+$('clear').onclick = () => { log.length = 0; $('list').innerHTML = ''; $('count').textContent = '0 measurements'; msg(''); drawStatic(); };
 
 $('publish').onclick = async () => {
   if (!log.length) { msg('nothing to publish', true); return; }
@@ -195,7 +226,7 @@ console.log('[wuffle] present=' + shell.present);
 
 // debug hook (spike): plot without physical tilt
 window.__wuffle = { plot: (d1, d2, m) => { log.push({ i: log.length + 1, mode: m, d1, d2,
-  strike: m === 'plane' ? (d1 + 270) % 360 : null, ts: new Date().toISOString() }); plotAll();
+  strike: m === 'plane' ? (d1 + 270) % 360 : null, ts: new Date().toISOString() }); drawStatic();
   $('count').textContent = log.length + ' measurements'; } };
 </script>
 </body>
