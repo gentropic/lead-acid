@@ -77,4 +77,28 @@ class ByteBufferInputStream(private val buf: ByteBuffer) : InputStream() {
     }
 
     override fun available(): Int = buf.remaining()
+
+    /** O(1) — the loader may skip() gigabytes to apply a Range; never read-through. */
+    override fun skip(n: Long): Long {
+        if (n <= 0) return 0
+        val k = minOf(n, buf.remaining().toLong())
+        buf.position(buf.position() + k.toInt())
+        return k
+    }
+}
+
+/**
+ * A stream of `size` phantom bytes: skippable in O(1), unreadable (instant EOF
+ * once skipped past). Lets the loader "apply" an unsatisfiable Range without
+ * erroring — used for 416 responses.
+ */
+class PhantomSkipStream(private var remaining: Long) : InputStream() {
+    override fun read(): Int = -1
+    override fun read(b: ByteArray, off: Int, len: Int): Int = -1
+    override fun available(): Int = minOf(remaining, Int.MAX_VALUE.toLong()).toInt()
+    override fun skip(n: Long): Long {
+        val k = maxOf(0, minOf(n, remaining))
+        remaining -= k
+        return k
+    }
 }

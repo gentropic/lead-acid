@@ -42,7 +42,10 @@ class FilePlugin(private val files: Map<String, File>) : Plugin {
         val rangeHeader = req.header("Range")
         val base = mapOf("Accept-Ranges" to "bytes")
 
-        if (rangeHeader == null) {
+        // Spike diagnostic: ?mode=full serves the WHOLE stream as 200 even for
+        // ranged requests — testing whether AndroidStreamReaderURLLoader applies
+        // the Range itself by skipping our InputStream.
+        if (rangeHeader == null || req.query["mode"] == "full") {
             val slice = buf.duplicate().apply { position(0); limit(total.toInt()) }
             return BridgeResponse(
                 200, "OK", "application/octet-stream",
@@ -52,14 +55,27 @@ class FilePlugin(private val files: Map<String, File>) : Plugin {
         }
 
         val range = parseRange(rangeHeader, total)
-            ?: return BridgeResponse(
+        if (range == null) {
+            // The loader still applies the request's Range to OUR stream — give
+            // it a phantom big enough to skip the requested start, so it reaches
+            // EOF instead of erroring (short stream → net error → "Failed to fetch").
+            val reqStart = rangeHeader.substringAfter("bytes=").substringBefore('-')
+                .trim().toLongOrNull() ?: total
+            return BridgeResponse(
                 416, "Range Not Satisfiable", "application/json",
                 base + mapOf("Content-Range" to "bytes */$total"),
+                PhantomSkipStream(maxOf(total, reqStart + 1)),
             )
+        }
 
         val (start, endIncl) = range
         val len = endIncl - start + 1
-        val slice = buf.duplicate().apply { position(start.toInt()); limit((endIncl + 1).toInt()) }
+        // SPIKE FINDING (S24+, WebView 150): AndroidStreamReaderURLLoader applies
+        // the request Range to the app's InputStream ITSELF — it skips `start`
+        // bytes (and resolves suffixes via available()), but never truncates the
+        // end. Contract: hand it the stream from position 0 CAPPED at end+1;
+        // do NOT pre-skip, or the loader's own skip runs off the end.
+        val slice = buf.duplicate().apply { position(0); limit((endIncl + 1).toInt()) }
         return BridgeResponse(
             206, "Partial Content", "application/octet-stream",
             base + mapOf(

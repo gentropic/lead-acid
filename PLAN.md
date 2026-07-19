@@ -137,6 +137,28 @@ strips `206`), we learn it here and fall to the documented soft-joint (spec §4.
 `WebMessagePort`) before writing anything else. This is spec Q-2 + the ranged-interceptor risk,
 isolated to a day.
 
+**SPIKE 0 RESULT (2026-07-19, S24+ / Android 16 / WebView 150): PASSED — the thesis holds.**
+All range forms round-trip correctly (full 200, explicit/suffix/open-ended 206 with correct
+bytes and Content-Range, 416 past-EOF), 62 MB/s over 32 sequential 256 KiB ranged reads
+(latency-bound; concurrent reads pipeline). Findings that bind the M0 design:
+
+1. **The loader applies the Range itself.** `AndroidStreamReaderURLLoader` (the machinery
+   behind intercepted responses) parses the request's `Range` header and skips `start` bytes
+   off the app's InputStream (resolving suffixes via `available()`), but never truncates the
+   end and passes the app's status/headers through untouched. **Contract: serve the stream
+   from position 0 capped at end+1; never pre-skip; implement O(1) `skip()`/`available()`.**
+   Pre-sliced streams fail with net errors when the loader's skip runs off the end (this is
+   why "some ranges failed" on the first run — every nonzero-start range died).
+2. **416 needs a phantom stream** — the loader skips the requested start regardless of
+   status, so an empty 416 body errors; serve `PhantomSkipStream(start+1)` (O(1) skip,
+   instant EOF) so the loader lands at EOF and delivers the 416 cleanly.
+3. **Request bodies never cross `shouldInterceptRequest`** (crbug 155250) — POST arrives
+   with method + headers only. Body-carrying calls ride SPEC §4.3's WebMessagePort
+   (ArrayBuffer-native, androidx.webkit ≥ 1.9), hidden behind `shell.native()`; "no base64,
+   ever" survives. Custom request headers DO cross (verified).
+4. **Environment:** WebGL2 true, **WebGPU true** (Q-1 answered on WebView 150), Content-Length
+   on intercepted responses is ignored by the renderer (set it truthfully anyway).
+
 ### M0 — the trench coat *(I write the Kotlin; you build+run)*
 
 `LeadAcidActivity` + asset loader + interceptor + `PluginRegistry` + the ranged `FilePlugin`

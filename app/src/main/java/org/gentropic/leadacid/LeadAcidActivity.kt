@@ -48,6 +48,13 @@ class LeadAcidActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
         }
+        // Page console → logcat, so spike results are readable over adb.
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
+                android.util.Log.i("leadacidjs", m.message())
+                return true
+            }
+        }
         webView.webViewClient = object : WebViewClientCompat() {
             override fun shouldInterceptRequest(
                 view: WebView,
@@ -102,8 +109,14 @@ class LeadAcidActivity : Activity() {
             headers = request.requestHeaders ?: emptyMap(),
         )
         return try {
-            plugin.handle(req).toWebResponse()
+            val res = plugin.handle(req)
+            android.util.Log.i(
+                "leadacid",
+                "${req.method} /native/$pluginName/$subpath range=${req.header("Range")} -> ${res.status} ${res.headers["Content-Range"] ?: ""}",
+            )
+            res.toWebResponse()
         } catch (e: Exception) {
+            android.util.Log.e("leadacid", "${req.method} /native/$pluginName/$subpath threw", e)
             BridgeResponse.error(500, "Internal Error", e.message ?: e.javaClass.simpleName)
                 .toWebResponse()
         }

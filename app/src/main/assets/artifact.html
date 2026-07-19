@@ -45,6 +45,7 @@ function report(kind, name, detail) {
   d.innerHTML = '<b>' + kind.toUpperCase() + '</b> ' + name +
     (detail ? '<div class="detail">' + detail + '</div>' : '');
   out.appendChild(d);
+  console.log('[spike] ' + kind.toUpperCase() + ' | ' + name + (detail ? ' | ' + detail : ''));
 }
 
 // byte[i] = i mod 251
@@ -55,15 +56,22 @@ function checkPattern(bytes, offset) {
   return null;
 }
 
+// Cache-bust every request: Chromium's HTTP cache has range-over-cached-entry
+// machinery (PartialData) that chokes on validator-less 206s to a URL it has
+// seen a full 200 for. Unique URLs sidestep it; the durable shell-side answer
+// is a spike finding.
+let seq = 0;
+function bust(url) { return url + '?r=' + (seq++); }
+
 async function ranged(start, endIncl) {
   const spec = (start === null ? '' : start) + '-' + (endIncl === null ? '' : endIncl);
-  return fetch('/native/fs/spike0.bin', { headers: { 'Range': 'bytes=' + spec } });
+  return fetch(bust('/native/fs/spike0.bin'), { headers: { 'Range': 'bytes=' + spec } });
 }
 
 async function run() {
   // 1. full GET
   try {
-    const r = await fetch('/native/fs/spike0.bin');
+    const r = await fetch(bust('/native/fs/spike0.bin'));
     const buf = new Uint8Array(await r.arrayBuffer());
     const err = buf.length === SIZE ? (checkPattern(buf.subarray(0, 4096), 0) ||
       checkPattern(buf.subarray(SIZE - 256), SIZE - 256)) : ('length ' + buf.length);
@@ -152,6 +160,35 @@ async function run() {
     if (r.status === 404) report('pass', 'unknown plugin — 404');
     else report('fail', 'unknown plugin', 'status ' + r.status);
   } catch (e) { report('fail', 'unknown plugin', String(e)); }
+
+  // Characterization: who applies the Range — the plugin (sliced) or the
+  // loader (full)? Pattern byte at index 0 reveals the actual start offset
+  // mod 251.
+  function startGuess(buf) {
+    if (!buf.length) return 'empty';
+    const o = buf[0];
+    for (let i = 1; i < Math.min(16, buf.length); i++)
+      if (buf[i] !== (o + i) % 251) return 'not-pattern';
+    return 'first-byte=' + o;
+  }
+  async function charac(spec, mode) {
+    const label = 'charac bytes=' + spec + ' mode=' + mode;
+    try {
+      const r = await fetch('/native/fs/spike0.bin?mode=' + mode + '&r=' + (seq++),
+        { headers: { 'Range': 'bytes=' + spec } });
+      const buf = new Uint8Array(await r.arrayBuffer());
+      report('info', label, 'status ' + r.status + ', len ' + buf.length +
+        ', ' + startGuess(buf) + ', Content-Range: ' + r.headers.get('Content-Range') +
+        ', Content-Length: ' + r.headers.get('Content-Length'));
+    } catch (e) { report('info', label, String(e)); }
+  }
+  // expected first bytes: 0→0; 1048576→149; 8387584(suffix)→168; 8388000→82
+  for (const mode of ['sliced', 'full']) {
+    await charac('0-1023', mode);
+    await charac('1048576-1049599', mode);
+    await charac('-1024', mode);
+    await charac('8388000-', mode);
+  }
 
   const fails = results.filter(r => r === 'fail').length;
   const v = document.getElementById('verdict');
