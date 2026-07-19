@@ -237,6 +237,10 @@ the build trigger. A row moves up from §5.1b only when an instrument names it.
 | `notify` | background workers (M4) | `POST /native/notify` | Post/cancel notifications outside service contexts ("post-processing finished") — the Notifications web API is absent in WebView |
 | `mcast` | jormungandr (`../jormungandr` — the phone joins the supervisor's subnet pub/sub) | `send`, `stream`, `status` | UDP multicast on the local subnet (MulticastSocket + MulticastLock) — the ATAK chemistry: subnet-as-rendezvous, ~80 lines. Primary field-sync carrier; see the field-carriers spec |
 
+**`ble` + `hid` have a full design doc:** `docs/bluetooth-plugins.md` (permissions, session
+lifecycle, routes, the classic-vs-BLE-HID decision, the RelayKVM/phone-as-keyboard vision). Not
+built — `share`/`attest` land first — but specced so implementation is mechanical.
+
 ### 5.1b The futures catalog — sketches with no driver yet: don't build
 
 Kept for their design content, not as a plan.
