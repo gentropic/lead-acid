@@ -21,6 +21,10 @@ class FilePlugin(private val files: Map<String, File>) : Plugin {
 
     private val mapped = HashMap<String, MappedByteBuffer>()
 
+    // M0 WORK ITEM: MappedByteBuffer caps at 2 GiB (Int-indexed), so this
+    // single-map approach — and the .toInt() limits below — hard-fail beyond
+    // that. The real plugin serves >2 GiB files through a window of maps
+    // (map per request range, or a small LRU of fixed-size segments).
     @Synchronized
     private fun mmap(token: String, file: File): MappedByteBuffer =
         mapped.getOrPut(token) {
@@ -42,10 +46,7 @@ class FilePlugin(private val files: Map<String, File>) : Plugin {
         val rangeHeader = req.header("Range")
         val base = mapOf("Accept-Ranges" to "bytes")
 
-        // Spike diagnostic: ?mode=full serves the WHOLE stream as 200 even for
-        // ranged requests — testing whether AndroidStreamReaderURLLoader applies
-        // the Range itself by skipping our InputStream.
-        if (rangeHeader == null || req.query["mode"] == "full") {
+        if (rangeHeader == null) {
             val slice = buf.duplicate().apply { position(0); limit(total.toInt()) }
             return BridgeResponse(
                 200, "OK", "application/octet-stream",

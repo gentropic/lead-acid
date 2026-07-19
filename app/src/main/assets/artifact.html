@@ -157,35 +157,6 @@ async function run() {
     else report('fail', 'unknown plugin', 'status ' + r.status);
   } catch (e) { report('fail', 'unknown plugin', String(e)); }
 
-  // Characterization: who applies the Range — the plugin (sliced) or the
-  // loader (full)? Pattern byte at index 0 reveals the actual start offset
-  // mod 251.
-  function startGuess(buf) {
-    if (!buf.length) return 'empty';
-    const o = buf[0];
-    for (let i = 1; i < Math.min(16, buf.length); i++)
-      if (buf[i] !== (o + i) % 251) return 'not-pattern';
-    return 'first-byte=' + o;
-  }
-  async function charac(spec, mode) {
-    const label = 'charac bytes=' + spec + ' mode=' + mode;
-    try {
-      const r = await fetch('/native/fs/spike0.bin?mode=' + mode,
-        { headers: { 'Range': 'bytes=' + spec } });
-      const buf = new Uint8Array(await r.arrayBuffer());
-      report('info', label, 'status ' + r.status + ', len ' + buf.length +
-        ', ' + startGuess(buf) + ', Content-Range: ' + r.headers.get('Content-Range') +
-        ', Content-Length: ' + r.headers.get('Content-Length'));
-    } catch (e) { report('info', label, String(e)); }
-  }
-  // expected first bytes: 0→0; 1048576→149; 8387584(suffix)→168; 8388000→82
-  for (const mode of ['sliced', 'full']) {
-    await charac('0-1023', mode);
-    await charac('1048576-1049599', mode);
-    await charac('-1024', mode);
-    await charac('8388000-', mode);
-  }
-
   const fails = results.filter(r => r === 'fail').length;
   const v = document.getElementById('verdict');
   if (fails === 0) { v.className = 'ok'; v.textContent = 'SPIKE 0 PASSES — the thesis holds. ' + results.filter(r => r === 'pass').length + ' pass, 0 fail.'; }

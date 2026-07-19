@@ -29,6 +29,11 @@ class LeadAcidActivity : Activity() {
     private lateinit var webView: WebView
     private val plugins = HashMap<String, Plugin>()
 
+    /** Debug builds only: dispatch logging + page-console mirroring to logcat. */
+    private val debuggable: Boolean by lazy {
+        (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,11 +53,13 @@ class LeadAcidActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
         }
-        // Page console → logcat, so spike results are readable over adb.
-        webView.webChromeClient = object : android.webkit.WebChromeClient() {
-            override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
-                android.util.Log.i("leadacidjs", m.message())
-                return true
+        // Page console → logcat, so test results are readable over adb.
+        if (debuggable) {
+            webView.webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
+                    android.util.Log.i("leadacidjs", m.message())
+                    return true
+                }
             }
         }
         webView.webViewClient = object : WebViewClientCompat() {
@@ -110,7 +117,7 @@ class LeadAcidActivity : Activity() {
         )
         return try {
             val res = plugin.handle(req)
-            android.util.Log.i(
+            if (debuggable) android.util.Log.i(
                 "leadacid",
                 "${req.method} /native/$pluginName/$subpath range=${req.header("Range")} -> ${res.status} ${res.headers["Content-Range"] ?: ""}",
             )

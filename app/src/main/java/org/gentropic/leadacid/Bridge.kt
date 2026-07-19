@@ -43,7 +43,11 @@ class BridgeResponse(
     fun toWebResponse(): WebResourceResponse {
         val res = WebResourceResponse(mime, null, body)
         res.setStatusCodeAndReasonPhrase(status, reason)
-        res.responseHeaders = HashMap(headers) + mapOf("Cache-Control" to "no-store")
+        // no-store is the default posture (don't churn the 20 MB WebView HTTP
+        // cache with slices of huge files) — a plugin's own Cache-Control wins.
+        val h = HashMap(headers)
+        h.putIfAbsent("Cache-Control", "no-store")
+        res.responseHeaders = h
         return res
     }
 

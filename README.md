@@ -20,9 +20,11 @@ The artifacts themselves live in the [auditable monorepo](https://github.com/end
 
 ## Status
 
-**Spike 0** — the one experiment that validates or kills the thesis: a ranged `fetch()`
-through `shouldInterceptRequest` must round-trip `Range: bytes=…` → `206 Partial Content`
-off a `MappedByteBuffer` on a real device (S24+).
+**Spike 0 PASSED** (2026-07-19, S24+ / Android 16 / WebView 150) — ranged `fetch()` through
+`shouldInterceptRequest` round-trips all range forms correctly off a `MappedByteBuffer`,
+65 MB/s on sequential 256 KiB reads. Key finding: the WebView loader applies the Range to the
+plugin's stream itself (see SPEC §4.1 and PLAN.md). Next: **M0**, the trench coat — micro's
+single file, unmodified, rendering a block model off ranged fetch from internal storage.
 
 ## Building
 

@@ -82,9 +82,27 @@ interface Plugin {
 }
 ```
 
-`BridgeRequest` carries method, subpath, query params, headers, and body bytes. `BridgeResponse` carries status, MIME type, headers, and an `InputStream` — meaning responses can be arbitrarily large and *streamed*, never buffered whole. Binary crosses the bridge as binary. No base64, ever.
+`BridgeRequest` carries method, subpath, query params, and headers. **Request bodies never
+cross `shouldInterceptRequest`** (Chromium crbug 155250, verified at Spike 0) — body-carrying
+calls ride the WebMessagePort lane (§4.3), hidden behind `lead-acid.js`'s `shell.native()` so
+the artifact-facing API is unchanged. `BridgeResponse` carries status, MIME type, headers, and
+an `InputStream` — meaning responses can be arbitrarily large and *streamed*, never buffered
+whole. Binary crosses the bridge as binary. No base64, ever.
 
-**Byte ranges are first-class.** The interceptor honors `Range` headers against plugin-served files (and asset files), returning `206 Partial Content`. This is the load-bearing feature: it is what lets micro `fetch()` sparse LOD reads directly out of a multi-gigabyte point cloud that a `FilePlugin` is serving off internal storage — ideally via `mmap` (`MappedByteBuffer`), letting the kernel page cache do the work.
+**Byte ranges are first-class.** The interceptor honors `Range` headers against plugin-served
+files (and asset files), returning `206 Partial Content`. This is the load-bearing feature: it
+is what lets micro `fetch()` sparse LOD reads directly out of a multi-gigabyte point cloud that
+a `FilePlugin` is serving off internal storage — ideally via `mmap` (`MappedByteBuffer`),
+letting the kernel page cache do the work.
+
+*Verified contract (Spike 0, S24+ / WebView 150):* WebView's `AndroidStreamReaderURLLoader`
+applies the request's Range to the plugin's InputStream **itself** — it skips `start` bytes
+(resolving suffix ranges via `available()`), never truncates the end, and passes the plugin's
+status/headers through untouched. A plugin therefore serves the stream **from position 0
+capped at end+1**, never pre-skipped, with O(1) `skip()`/`available()`; it still computes the
+`206`/`Content-Range` headers itself. Unsatisfiable ranges answer `416` with a phantom
+skippable stream (the loader applies the skip regardless of status; a short stream turns into
+a net error). Full detail and the debugging arc: PLAN.md, Spike 0 findings.
 
 ### 4.2 Push — Server-Sent Events
 
