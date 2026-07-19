@@ -53,6 +53,13 @@ class LeadAcidActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
         }
+        // Debug builds: expose the WebView's DevTools socket. With
+        // `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>`
+        // a desktop Playwright connects over CDP and drives the artifact
+        // exactly like the committed smoke harnesses drive it in headless
+        // Chromium — the on-device dev loop.
+        if (debuggable) WebView.setWebContentsDebuggingEnabled(true)
+
         // Page console → logcat, so test results are readable over adb.
         if (debuggable) {
             webView.webChromeClient = object : android.webkit.WebChromeClient() {
