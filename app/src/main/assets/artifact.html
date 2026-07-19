@@ -214,6 +214,21 @@ async function run() {
     }
   } catch (e) { report('fail', 'push stream (port)', String(e)); }
 
+  // 11d. attest: hardware-backed sign, verified with WebCrypto (round-trip proof)
+  try {
+    const shell = window.__shell || (await import('./lead-acid.js')).shell;
+    const payload = new TextEncoder().encode('lead-acid attest ' + navigator.userAgent.slice(0, 20));
+    const r = await shell.attest.sign(payload);
+    const dec = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey('spki', dec(r.pub), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+    const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, dec(r.sig), payload);
+    // tamper check: verifying a mutated payload must FAIL
+    const bad = new Uint8Array(payload); bad[0] ^= 1;
+    const okBad = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, dec(r.sig), bad);
+    report(ok && !okBad ? 'pass' : 'fail', 'attest sign + WebCrypto verify',
+      'security=' + r.security + ' · ' + r.alg + ' · valid=' + ok + ' tampered-rejected=' + !okBad);
+  } catch (e) { report('fail', 'attest', String(e)); }
+
   // 11. §7c shell controls: keepawake route + shell/info
   try {
     const info = await (await fetch('/native/shell/info')).json();

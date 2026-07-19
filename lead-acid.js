@@ -116,6 +116,28 @@ export const shell = (() => {
     return r.json();   // { uri, name, bytes }
   }
 
+  // Hand a file (or text) to the system share sheet. The chooser is the user's
+  // confirmation — it's not a silent send.
+  async function share(name, bytes, { mime = 'application/octet-stream', text } = {}) {
+    let q = `?name=${encodeURIComponent(name)}&mime=${encodeURIComponent(mime)}`;
+    if (text) q += `&text=${encodeURIComponent(text)}`;
+    return (await native('share' + q, { method: 'POST', body: bytes })).ok;
+  }
+  async function shareText(text) {
+    return (await native('share?mime=text/plain&text=' + encodeURIComponent(text), { method: 'POST' })).ok;
+  }
+
+  // Hardware-backed signing (StrongBox/TEE). `sign` returns a raw P-256 sig that
+  // verifies with WebCrypto ECDSA/P-256/SHA-256 directly.
+  const attest = {
+    async sign(bytes) {
+      const r = await native('attest/sign', { method: 'POST', body: bytes });
+      if (!r.ok) throw new Error('attest failed: ' + r.status);
+      return r.json();   // { alg, sig, pub, hash, security }
+    },
+    async keyinfo() { return (await native('attest/keyinfo')).json(); },
+  };
+
   // Registered fs tokens (SAF picks + built-ins): [{token, size}]
   async function files() {
     try { return await (await native('fs/list')).json(); }
@@ -163,5 +185,5 @@ export const shell = (() => {
     };
   }
 
-  return { present, native, stream, version, keepAwake, publish, files, fileSource, fsBackend };
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend };
 })();

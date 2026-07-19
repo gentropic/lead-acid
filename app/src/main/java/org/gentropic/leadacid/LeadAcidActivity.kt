@@ -121,6 +121,10 @@ class LeadAcidActivity : ComponentActivity() {
         File(filesDir, "spike0.bin").also(::ensureTestFile)
         register(filePlugin)
         register(sensorPlugin)
+        register(SharePlugin(::shareOut))
+        register(AttestPlugin(
+            strongBoxAvailable = packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE),
+        ))
         register(ShellPlugin(
             version = versionName(),
             onKeepAwake = { on ->
@@ -457,6 +461,27 @@ class LeadAcidActivity : ComponentActivity() {
             android.util.Log.e("leadacid", "publishToMediaStore failed", e)
             null
         }
+    }
+
+    /** share plugin backend: ACTION_SEND a file (FileProvider) or text, via the chooser. */
+    private fun shareOut(name: String, mime: String, text: String?, bytes: ByteArray?): Boolean = try {
+        val send = Intent(Intent.ACTION_SEND)
+        if (text != null) send.putExtra(Intent.EXTRA_TEXT, text)
+        if (bytes != null) {
+            val dir = File(cacheDir, "share").apply { mkdirs() }
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "shared" }
+            val f = File(dir, safe).apply { writeBytes(bytes) }
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            send.type = mime
+            send.putExtra(Intent.EXTRA_STREAM, uri)
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } else {
+            send.type = "text/plain"
+        }
+        startActivity(Intent.createChooser(send, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (e: Exception) {
+        android.util.Log.e("leadacid", "shareOut failed", e); false
     }
 
     private fun hasPermission(perm: String) =
