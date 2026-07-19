@@ -60,6 +60,10 @@ class LeadAcidActivity : ComponentActivity() {
         FilePlugin(mapOf("spike0.bin" to File(filesDir, "spike0.bin")), ::publishToMediaStore)
     }
 
+    private val sensorPlugin by lazy {
+        SensorPlugin(getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager)
+    }
+
     /** Fullscreen (§7c): the custom view an artifact hands us via onShowCustomView. */
     private var customView: View? = null
     private var customViewCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
@@ -82,6 +86,7 @@ class LeadAcidActivity : ComponentActivity() {
 
         File(filesDir, "spike0.bin").also(::ensureTestFile)
         register(filePlugin)
+        register(sensorPlugin)
         register(ShellPlugin(version = versionName()) { on ->
             runOnUiThread {
                 if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -220,6 +225,7 @@ class LeadAcidActivity : ComponentActivity() {
             // opens don't leak. Built-in tokens survive.
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 filePlugin.releaseSaf()
+                sensorPlugin.releaseAll()
                 shellPort = null
                 bodyById.clear()
             }
@@ -444,6 +450,14 @@ class LeadAcidActivity : ComponentActivity() {
                 pendingPermissionRequest = null
             }
         }
+    }
+
+    override fun onPause() {
+        // SPEC §5 background stance: the WebView doesn't run in the background,
+        // so sensor streams stop when we leave the foreground (battery). The
+        // page's EventSource auto-reconnects on resume.
+        sensorPlugin.releaseAll()
+        super.onPause()
     }
 
     override fun onDestroy() {

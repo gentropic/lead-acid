@@ -186,6 +186,37 @@ async function run() {
     }
   } catch (e) { report('fail', 'fs/publish', String(e)); }
 
+  // 11c. §4.2 PUSH lane / V-1: does SSE flush per-event through the interceptor?
+  await new Promise((resolve) => {
+    const t0 = performance.now();
+    const times = [];
+    let opened = 0;
+    const es = new EventSource('/native/sensor/stream?types=rotation&rateHz=30');
+    es.onopen = () => { opened = performance.now() - t0; };
+    es.addEventListener('rotation', () => times.push(performance.now()));
+    setTimeout(() => {
+      es.close();
+      const n = times.length;
+      if (!n) { report('fail', 'V-1 SSE flush', 'opened=' + opened.toFixed(0) + 'ms but 0 events in 2s (buffered)'); return resolve(); }
+      const ttff = times[0] - t0;                                  // time to first event
+      const gaps = times.slice(1).map((t, i) => t - times[i]);
+      const steady = gaps.slice(3);                                // ignore startup ramp
+      const mean = steady.reduce((a, b) => a + b, 0) / (steady.length || 1);
+      const maxSteady = steady.length ? Math.max(...steady) : 0;
+      // Verdict on STEADY-STATE flush (startup latency is a one-time cost, fine
+      // for a long-lived stream). Smooth + bounded steady gap = per-event flush.
+      const bigGaps = gaps.map((g, i) => [i, Math.round(g)]).filter(x => x[1] > 100);
+      console.log('[gaps>100ms] ' + JSON.stringify(bigGaps) + ' of ' + gaps.length + ' gaps');
+      const flushes = n > 20 && maxSteady < 150;
+      report(flushes ? 'pass' : 'fail', 'V-1 SSE flushes per-event',
+        n + ' events/2s · first at ' + ttff.toFixed(0) + 'ms · steady mean ' + mean.toFixed(0) +
+        'ms max ' + maxSteady.toFixed(0) + 'ms' +
+        (flushes ? ' — PUSH lane works (startup latency only; no port fallback needed)'
+                 : ' — buffered mid-stream; needs port streams'));
+      resolve();
+    }, 2000);
+  });
+
   // 11. §7c shell controls: keepawake route + shell/info
   try {
     const info = await (await fetch('/native/shell/info')).json();

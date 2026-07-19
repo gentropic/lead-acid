@@ -124,12 +124,19 @@ const gnss = new EventSource('/native/gnss/stream');
 gnss.addEventListener('raw', e => ingest(JSON.parse(e.data)));
 ```
 
-Native side: a plugin returns a `text/event-stream` response whose `InputStream` is fed by a pipe the plugin keeps writing into. lead-acid provides an `SseStream` helper (`emit(event, data)`, `close()`) so plugins never hand-format the wire protocol.
+Native side: a plugin returns a `text/event-stream` response whose `InputStream` is an
+`SseStream` — `emit(event, data)` / `comment` / `close`, fed from any thread (bounded queue,
+drops oldest on overflow so the producer never blocks), with `onClose` firing when the WebView
+tears the response down (`EventSource.close()`, navigation) so the plugin releases its source.
 
-Requirements:
-
-- Events must flush per-emit. **Verification item V-1:** confirm the intercepted stream is not buffered by the WebView; if any layer buffers, pad or fall back per V-1 findings.
-- `EventSource` auto-reconnect must work (plugin streams must tolerate reconnection and honor `Last-Event-ID` where meaningful).
+**V-1 RESOLVED (S24+ / WebView 150): the interceptor buffers ~2 KiB before delivering to the
+page, batching events into ~400 ms clumps** (measured: big gaps every ~20 events). The fix is
+`SseStream(padTo = N)` — a trailing comment after each event so every frame exceeds the buffer
+and flushes immediately. With `padTo ≈ 2200`: **per-event delivery, ~20 ms steady, 31 ms
+startup, zero gaps > 100 ms**. Cost is a couple KiB per event — trivial on a local (non-network)
+stream. So the **push lane is SSE + padding** for JSON events; no WebMessagePort fallback needed
+(binary firehoses still prefer port streams, §4.3). `EventSource` auto-reconnect works; the
+`sensor` plugin is the reference (`GET /native/sensor/stream?types=…&rateHz=…`).
 
 ### 4.3 The port — bodies and binary streams
 
