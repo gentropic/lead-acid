@@ -56,7 +56,18 @@ first instrument is wuffle, not aupro).
 
 ## 4. The bridge
 
-Two pipes. That is the whole spec.
+Three lanes, each doing the one thing it is good at:
+
+| lane | direction | carries | good at |
+|---|---|---|---|
+| `fetch` (+ port body sidecar, §4.3) | request/reply | routing, statuses, streamed responses of any size | the spine — every call goes through it |
+| `EventSource` (§4.2) | native → JS push | low-rate JSON events | auto-reconnect, `Last-Event-ID`, zero ceremony |
+| `WebMessagePort` (§4.3) | both | ArrayBuffers | request bodies; high-rate binary push |
+
+Request bodies never cross `shouldInterceptRequest` (verified, §4.1), and SSE is a text
+protocol — so bodies and binary firehoses ride the port. Every stream-shaped plugin declares
+which push lane it uses; "JSON at human rates → SSE, binary at machine rates → port" is the
+assignment rule.
 
 ### 4.1 Request/reply — `fetch`
 
@@ -120,9 +131,22 @@ Requirements:
 - Events must flush per-emit. **Verification item V-1:** confirm the intercepted stream is not buffered by the WebView; if any layer buffers, pad or fall back per V-1 findings.
 - `EventSource` auto-reconnect must work (plugin streams must tolerate reconnection and honor `Last-Event-ID` where meaningful).
 
-### 4.3 The third pipe that exists only if needed
+### 4.3 The port — bodies and binary streams
 
-If V-1 fails or a use case genuinely needs low-latency native→JS binary push (none identified yet), the fallback is `WebMessagePort` with `WebMessagePayload` ArrayBuffer support (androidx.webkit ≥ 1.9.0). This is explicitly **out of v1** unless forced in.
+`WebMessagePort` with ArrayBuffer payloads (androidx.webkit ≥ 1.9.0). Originally "the third
+pipe that exists only if needed"; Spike 0 promoted it — request bodies never cross the
+interceptor, and more than half the catalog's calls carry one (`fs/publish`, `nn/run`,
+`print`, `widget/state`, `worker/schedule`, …). Two uses:
+
+- **Body sidecar (uniform, all sizes).** `shell.native(path, {body})` sends the body over the
+  port as an ArrayBuffer tagged with a request id, then issues the fetch carrying the id in a
+  header; the shell joins the two (the interceptor thread waits briefly on the id). The fetch
+  remains the spine — routing, status codes, §4.6 error semantics all unchanged — and the
+  artifact never sees the seam. One mechanism for a 200-byte JSON and a 40 MB DNG alike: no
+  base64, no size cliff, binary crosses as binary at memory-copy speed.
+- **Binary push streams.** High-rate native→JS data (UNPROCESSED audio frames,
+  SensorDirectChannel IMU batches) streams as ArrayBuffers over a port channel the plugin
+  opens; SSE stays for low-rate JSON events (§4 assignment rule).
 
 ### 4.4 Escape hatch (documented, discouraged)
 
@@ -141,7 +165,7 @@ export const shell = {
 };
 ```
 
-Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes.
+Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter**, so Works/notebook artifacts mount phone storage with zero new concepts.
 
 ### 4.6 Error conventions
 
@@ -150,6 +174,7 @@ One scheme, shell-wide, so instruments never invent their own:
 - **`404`** — unknown route or plugin not registered in this app.
 - **`403`** — Android permission not yet granted. Response body `{error, permission, canRequest}`; if `canRequest` is true, `POST /native/perm/request` (shell-provided route) triggers the system prompt and resolves when the user answers. Distinct from permanently denied (`canRequest: false`).
 - **`503`** — capability absent on this device (no UWB radio, no barometer, no StrongBox). Body `{error, capability}`. Not an error state to retry; a fact to design around.
+- **`409`** — session/claim conflict (device already claimed, single-session plugin busy). Body `{error, holder}` where feasible. Distinct from `503`: the capability exists, someone has it.
 - **`500`** — plugin threw. Body `{error, detail}`; `detail` is the exception message, never a stack trace in release builds.
 
 "This phone can't" (`503`), "the user hasn't said yes yet" (`403` + canRequest), and "the user said no" (`403`, no canRequest) are three different UX situations, and the bridge must keep them distinguishable.
@@ -160,43 +185,55 @@ The missing quarter of artifact sovereignty: instruments must be developable in 
 
 ## 5. Plugin conventions
 
-- **Naming:** plugin name = path segment = Kotlin class `XxxPlugin`. Routes are documented in each plugin's header comment in OpenAPI-ish shorthand.
-- **Permissions:** each plugin declares the Android permissions it needs; the build template merges only the permissions of plugins actually registered. An app with no GNSS plugin requests no location permission. This is both hygiene and Play-review strategy: permissions always match visible purpose.
+- **Naming:** plugin name = path segment = Kotlin class `XxxPlugin`. Routes are documented in each plugin's header comment in OpenAPI-ish shorthand. Route grammar: `GET /noun` reads state, `POST /verb` acts, `/stream` suffixes push (lane per §4), session routes live under `/session/`.
+- **Permissions are build-enforced, not promised:** each plugin is a tiny Gradle library module carrying its own manifest fragment; Android's manifest merger then makes it *structurally impossible* for an app to ship a permission whose plugin it doesn't depend on. An app with no GNSS module cannot request location. This is hygiene, Play-review strategy (permissions always match visible purpose), and the @gcu/seal instinct: the capability claim is a build fact.
+- **Composition is the artifact's job.** No plugin ever calls another plugin. gnss+spp (external RTK), camera+attest (signed capture), intake+share+attest (aupro) — all composed in the artifact's JS, native side stays a flat registry of independent concerns.
+- **Sessions have one contract, in shell core.** Plugins that hold native state open (BLE/USB claims, camera preview, audio capture, radio sessions) register sessions with the shell's SessionRegistry, owned by a *page generation*. A WebView reload invalidates the generation: sessions auto-release — unless backed by a foreground service, in which case the new page **re-attaches** (the §5 background stance made into a rule). Claim conflicts answer `409` (§4.6).
 - **Lifecycle:** plugins receive `onCreate/onResume/onPause/onDestroy` forwarding, and may request a **foreground service** context for long-running work (GNSS logging with the screen off). The foreground-service plumbing is shell-provided; a plugin opts in with one flag. **Badge work is Kotlin; JS only computes, never tends.** Service loops are platform-callback plumbing (dumb, reliable capture) written natively — there is no JS-mode service. A plugin's service *may* evaluate a pure worker function per-batch where a transform genuinely earns it (capture in Kotlin, digest through the isolate every N seconds), keeping the function fixture-testable; that is a per-plugin decision, never a shell mode. The service notification is a UX surface: state the instrument's actual state ("GNSS logging — 4,312 epochs, fix: RTK float"), not "app is running."
 - **Threading:** `handle()` is called off the main thread. Plugins touching main-thread-only APIs (camera, some sensor registration) use the provided `onMain {}` helper.
 - **Background stance:** the WebView never runs in the background. Background *work* is Kotlin's job (foreground-service plugins, WorkManager); the artifact reattaches to ongoing native work on reopen (SSE reconnect, state catch-up). Persistent offscreen WebViews fight Android's process and power management and lose — lead-acid does not field that fight.
 
-### 5.1 Anticipated first-party plugins (each its own milestone, not v1)
+### 5.1 The committed set — plugins with a named driving instrument
+
+Each lands *with* its instrument (the M3+ model), never speculatively; the driver column is
+the build trigger. A row moves up from §5.1b only when an instrument names it.
+
+| Plugin | Driver | Routes (sketch) | Native surface |
+|---|---|---|---|
+| `fs` | micro (M0) → every file-consuming artifact | `GET /native/fs/{token}` (ranged), `POST /native/fs/publish` | SAF picker + mmap'd serving; `publish` inserts finished outputs (DNGs, logs, upscales) into public MediaStore collections (Photos, Downloads) so they survive uninstall — app-private storage dies with the app |
+| `sensor` | wuffle v2 (survey-grade orientation) | `GET /native/sensor/stream?types=…` | SensorManager, uncalibrated streams. For sustained high-rate capture (200–800Hz IMU, vibration/hammer-seismics experiments), **`SensorDirectChannel`**: HAL writes samples into a shared hardware buffer, bypassing per-event callback overhead — the difference between phone-as-toy and phone-as-data-logger at those rates. High-rate batches push on the port lane (§4) |
+| `gnss` | wuffle v3 → the raw GNSS logger | `stream`, `status`, `log/start`, `log/stop` | GnssMeasurement raw observations |
+| `ble` | aupro's rig hardware; any Pico instrument | `scan`, `connect`, `gatt/…`, `stream` | BLE central (GATT client). Needed because **Android WebView has no Web Bluetooth** — artifacts that talk to BLE instruments (a Pico, field hardware) reach them through this plugin, not the browser API |
+| `spp` | aupro (external RTK receivers) | `connect`, `stream`, `mockloc/start` | Bluetooth Classic serial to external RTK receivers + system mock location provider |
+| `camera` | wuffle v3 (outcrop photo) → the camera app | `preview` (stream), `capture`, `params` | CameraX: RAW, manual, multi-lens. Android 17 adds **RAW14** (`ImageFormat.RAW14`, 14-bit/pixel) on compatible sensors — capture at the deepest format the hardware admits |
+| `attest` | the first data-producing instrument — land early (the starred sleeper) | `POST /native/attest/sign`, `keyinfo` | Hardware keystore (StrongBox/TEE) signing of capture hashes — cryptographic provenance for field data |
+| `intake` | aupro (the packer's front door) | (manifest share target → `stream`) | Android share sheet as input: pipe shared files/text into an artifact |
+| `share` | every instrument's export gesture | `POST /native/share` | Outbound twin of `intake`: hand a file or text to the system share sheet (Web Share API is absent in WebView). The natural "export this log" gesture |
+| `notify` | background workers (M4) | `POST /native/notify` | Post/cancel notifications outside service contexts ("post-processing finished") — the Notifications web API is absent in WebView |
+| `mcast` | jormungandr (`../jormungandr` — the phone joins the supervisor's subnet pub/sub) | `send`, `stream`, `status` | UDP multicast on the local subnet (MulticastSocket + MulticastLock) — the ATAK chemistry: subnet-as-rendezvous, ~80 lines. Primary field-sync carrier; see the field-carriers spec |
+
+### 5.1b The futures catalog — sketches with no driver yet: don't build
+
+Kept for their design content, not as a plan.
 
 | Plugin | Routes (sketch) | Native surface |
 |---|---|---|
-| `fs` | `GET /native/fs/{token}` (ranged), `POST /native/fs/publish` | SAF picker + mmap'd serving; `publish` inserts finished outputs (DNGs, logs, upscales) into public MediaStore collections (Photos, Downloads) so they survive uninstall — app-private storage dies with the app |
-| `sensor` | `GET /native/sensor/stream?types=…` | SensorManager, uncalibrated streams. For sustained high-rate capture (200–800Hz IMU, vibration/hammer-seismics experiments), **`SensorDirectChannel`**: HAL writes samples into a shared hardware buffer, bypassing per-event callback overhead — the difference between phone-as-toy and phone-as-data-logger at those rates |
-| `gnss` | `stream`, `status`, `log/start`, `log/stop` | GnssMeasurement raw observations |
 | `hid` | `POST /native/hid/report`, `stream` (state) | BLE HID peripheral via `BluetoothHidDevice` (RelayKVM: phone as controller+bridge, or as software-defined relay — NUS GATT server in, HID out; dual-peripheral operation is a per-device verification item) |
-| `ble` | `scan`, `connect`, `gatt/…`, `stream` | BLE central (GATT client). Needed because **Android WebView has no Web Bluetooth** — artifacts that talk to BLE instruments (a Pico, field hardware) reach them through this plugin, not the browser API |
-| `camera` | `preview` (stream), `capture`, `params` | CameraX: RAW, manual, multi-lens. Android 17 adds **RAW14** (`ImageFormat.RAW14`, 14-bit/pixel) on compatible sensors — capture at the deepest format the hardware admits |
 | `nn` | `POST /native/nn/{model}/run` | LiteRT, best-available delegate (NPU→GPU→CPU). SDK 37+: NPU access (including the LiteRT NPU delegate) requires declaring `FEATURE_NEURAL_PROCESSING_UNIT` in the manifest — joins the plugin's permission merge |
 | `usb` | enumerate, claim, transfer | USB host / OTG serial |
 | `grip` | `stream` (inputs), `POST display` | Composite HID+CDC device (see grip project) |
-| `attest` | `POST /native/attest/sign`, `keyinfo` | Hardware keystore (StrongBox/TEE) signing of capture hashes — cryptographic provenance for field data |
-| `audio` | `stream?src=unprocessed`, `record` | AudioRecord UNPROCESSED source, exact sample timestamps (hammer seismics, acoustic experiments) |
-| `spp` | `connect`, `stream`, `mockloc/start` | Bluetooth Classic serial to external RTK receivers + system mock location provider |
+| `audio` | `stream?src=unprocessed`, `record` | AudioRecord UNPROCESSED source, exact sample timestamps (hammer seismics, acoustic experiments). Frames push on the port lane (§4) — binary at machine rate is not SSE's job |
 | `nfc` | `stream` (tag taps), `write` | Tap-to-log sample chain-of-custody: tag ID + GPS + timestamp |
 | `cell` | `snapshot`, `stream` | CellInfo tower IDs and signal strengths — RF coverage mapping |
 | `ranging` | `sessions`, `stream` | Wi-Fi RTT + UWB behind one interface, GNSS-denied positioning |
-| `intake` | (manifest share target → `stream`) | Android share sheet as input: pipe shared files/text into an artifact |
 | `haptics` | `POST /native/haptics/play` | Vibration composition API: virtual detents, capture thunk |
 | `baro` | `stream`, `snapshot` | Barometer: relative elevation, barometric leveling, pressure-stamped logs |
-| `mcast` | `send`, `stream`, `status` | UDP multicast on the local subnet (MulticastSocket + MulticastLock) — the ATAK chemistry: subnet-as-rendezvous, ~80 lines. Primary field-sync carrier; see the field-carriers spec |
 | `aware` | `publish`, `subscribe`, `stream`, `socket/{peer}` | Wi-Fi Aware (NAN): infrastructure-free discovery + IPv6 link-local data in the true void. Hardware-gated (`503` when absent), Android-only in practice — queued behind `mcast`, allowed to never happen. See the field-carriers spec |
 | `meshtastic` | `send`, `stream`, `nodes`, `status` | LoRa mesh at ridge distance via the official Meshtastic app's `IMeshService` AIDL binding (the ATAK-plugin pattern); GCU traffic on registered private portnums. App-level dependency, `503` without it. Beacon/record bandwidth only — see the field-carriers spec §3b |
 | `print` | `POST /native/print` | Android print framework: log sheets and custody forms onto site printers |
 | `torch` | `POST /native/torch` | Flashlight control, intensity where supported (fill light) |
 | `sms` | `POST /native/sms/send` | Data-over-SMS telemetry for dead zones. **Sideload-only forever** — Play treats SMS permissions as radioactive |
 | `widget` | `POST /native/widget/state` | Home-screen App Widget as dumb terminal: artifact posts JSON state, Kotlin maps it onto a RemoteViews template. Last state persisted (SharedPreferences) and re-rendered on system `onUpdate`, so the widget survives process death with no WebView kept alive — the shoulder-LCD pattern, home-screen edition |
-| `share` | `POST /native/share` | Outbound twin of `intake`: hand a file or text to the system share sheet (Web Share API is absent in WebView). The natural "export this log" gesture |
-| `notify` | `POST /native/notify` | Post/cancel notifications outside service contexts ("post-processing finished") — the Notifications web API is absent in WebView |
 | `tts` | `POST /native/tts/speak` | System text-to-speech engine (offline, no services dependency). Speech *recognition* stays unbuilt: it routes through Google services and fails the collects-nothing posture |
 | `tile` | `POST /native/tile/state` | Quick Settings tile (`TileService`): instrument toggle in the notification shade, rendered from persisted state like the widget; taps route to the plugin's service. The fifth shoulder-LCD surface, and the most instrument-shaped one Android offers |
 | `thermal` | `GET /native/thermal/headroom`, `stream` | `ThermalManager` headroom/throttling status + ADPF performance hints — lets the *artifact* drop the LOD budget or pause an `nn` batch before the OS throttles uglier |
