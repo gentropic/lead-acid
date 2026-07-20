@@ -31,11 +31,17 @@ The pitch is the same move as RelayKVM-as-keyboard: an automation app that *prov
 
 ## 2. Rules are documents
 
-Automation rules are the artifact's content: trigger → condition → action, declarative, no computation. Stored as `@gcu/yaml` (strict auditable subset) documents. The rule language's entire semantics must fit on one page — that is what keeps rules *auditable* rather than merely stored.
+Automation rules are the artifact's content: trigger → condition → action, declarative, stored as
+`@gcu/yaml` (strict auditable subset) documents. Conditions **compute** — but only *bounded*
+expressions (comparisons, boolean logic, time math, interpolation; the CEL/spreadsheet shape, always
+total), via `@gcu/expr` (friendly strings) + `@gcu/sift` (structured predicates). Arbitrary/unbounded
+computation — loops, transforms — graduates to a worker. The whole semantics fits on one page; that
+bound is what keeps rules auditable AND lets the two runners (JS + Kotlin) be proven identical.
+**Full design: `docs/reflex-rules.md`.**
 
 - **Kotlin executes rules but does not interpret a language.** Rules are parsed once and evaluated as data. Badge work is Kotlin; the rule engine is trigger listeners (geofence callbacks, broadcast receivers — dumb, reliable) plus an intent-firing action executor. Roughly three plugins on lead-acid.
-- **The WebView is the rule *editor*** — a Switchboard surface for composing, reading, and testing rules. The brain designs the reflex arc; the spinal cord runs it.
-- The moment a rule wants *logic* — transform content, decide based on data — it has graduated beyond a reflex. That work belongs to an instrument's worker or interactive flow (lead-acid §5.2–5.3), invoked *by* a reflex, never embedded *in* one.
+- **The WebView is the rule *editor*** — a Switchboard surface for composing, reading, and testing rules (the JS runner dry-runs them). The brain designs the reflex arc; the spinal cord runs it.
+- The moment a rule wants *logic* — transform content, iterate, derive from a dataset — it has graduated beyond a reflex. That work belongs to an instrument's worker or interactive flow (lead-acid §5.2–5.3), invoked *by* a reflex, never embedded *in* one.
 
 ## 3. The ecosystem seam
 
