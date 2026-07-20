@@ -266,6 +266,32 @@ Kept for their design content, not as a plan.
 | `tts` | `POST /native/tts/speak` | System text-to-speech engine (offline, no services dependency). Speech *recognition* stays unbuilt: it routes through Google services and fails the collects-nothing posture |
 | `tile` | `POST /native/tile/state` | Quick Settings tile (`TileService`): instrument toggle in the notification shade, rendered from persisted state like the widget; taps route to the plugin's service. The fifth shoulder-LCD surface, and the most instrument-shaped one Android offers |
 | `thermal` | `GET /native/thermal/headroom`, `stream` | `ThermalManager` headroom/throttling status + ADPF performance hints — lets the *artifact* drop the LOD budget or pause an `nn` batch before the OS throttles uglier |
+| `biometric` | `POST /native/biometric/prompt`, `keyinfo` | `BiometricPrompt` — unlock-to-act. **Pairs with `attest`:** a keystore key bound to biometric auth signs only after a fingerprint/face check → *unlock-to-sign* provenance. The one non-exotic capacitor-parity gap actually worth building. |
+| `sqlite` | `POST /native/sqlite/exec`, `query` (batch), `POST /native/sqlite/tx` | Native SQLite (+ optional SpatiaLite/R*Tree) for a **relational/indexed/spatial** local store — a data-collection instrument (records app, aupro collector), NOT the columnar-streaming path (`fs` already serves block models/clouds). **Caveat:** native-over-the-bridge has a per-query latency tax vs in-process wasm SQLite; wins on big queries + heavy writes + spatial indexes, so the API is batch/cursor-first. Build when a collection instrument drives it. |
+| `securestore` | `GET/POST /native/securestore/{key}` | `EncryptedSharedPreferences` (keystore-wrapped) key-value for small secrets/tokens a networked artifact needs. `attest`-adjacent; not for bulk data (that's `fs`). |
+| `badge` | `POST /native/badge` | App-icon notification badge count (the sixth shoulder-LCD surface). Trivial. |
+| `clipboard` | `GET/POST /native/clipboard` | System clipboard read/write. Trivial; `403` on read where the OS gates paste. |
+| `device` | `GET /native/device` | Static device facts (model, api level, screen, sensors present, StrongBox) for capability-shaping. Read-only, no perm. |
+| `net` | `GET /native/net/status`, `stream` | Connectivity status (`ConnectivityManager`) — only for **networked** artifacts that need to know they're offline. Absent by default (the Sealed posture has no network to report). |
+| `screen` | `POST /native/screen/brightness` | Force brightness (sun readability) + orientation lock; the field companion to `keepAwake`. |
+
+**Capacitor-parity audit (2026-07):** the popular Capacitor ecosystem sorts into (a) the same device
+capabilities already above, (b) things the artifact does itself (SQLite-via-wasm, dialogs, toast,
+maps, preferences — the artifact brings its UI + storage), and (c) a large set we deliberately
+**refuse** on posture grounds — OAuth/social login, remote push (needs an FCM server), the Firebase
+suite (analytics/auth/crashlytics), speech *recognition* (Google-server-routed), IAP/payments,
+contacts/calendar/health. The genuine unplanned remainder was small and non-exotic (the rows above).
+lead-acid also has depth Capacitor lacks in the field-instrument niche: `attest` provenance, `hid`
+peripheral, raw `gnss`, `meshtastic`, the streaming mmap `fs`.
+
+**Route additions to committed plugins (not new plugins):**
+- `fs`: a **directory / tree pick** (`ACTION_OPEN_DOCUMENT_TREE`) — micro's project folders need a
+  whole-folder pick, and `onShowFileChooser` only does files. `GET /native/fs/picktree` → a token
+  scoping ranged reads/writes under the granted tree.
+- `camera`: a **video** capture mode + on-device **OCR/QR** (ML Kit, no network — photograph a
+  core-box label → text; scan a sample tag; the visual sibling of `nfc` tap-to-log; combines with `nn`).
+- `sensor`: extend the type map with proximity / ambient-light / pressure / temp / humidity / step —
+  all `SensorManager` sensors, a one-line-each addition.
 
 **Design-log note — Companion Device Manager.** For instruments with dedicated hardware (the grip, RelayKVM's Pico): CDM association replaces the generic scan-everything flow with a system dialog scoped to the device, and grants background presence privileges — wake when the companion appears, observe its connection without broad scan/location permissions, exemptions from some background-start restrictions. "Grip clicked on → camera instrument ready." One shell-level `companion` affordance serves all hardware projects.
 
