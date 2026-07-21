@@ -106,6 +106,26 @@ maximally secure but creates a **recovery hazard**: lose the YubiKey → can't u
 - Alternative for those who accept less purity: generate the key in software, back it up encrypted
   offline, *import* it to the YubiKey. Recoverable, but the key touched software once.
 
+## Who is this for — the easy path is Play, the studio is for sovereignty
+
+There are two audiences, and the studio only serves the second:
+
+- **"Just do it, don't care about Play"** → **Play App Signing** *is* Google's cloud signing: Google
+  generates + holds the key and re-signs on delivery, lowest-pain, key recovery is Google's problem.
+  Use the normal M2 AAB pipeline → upload → done. The cost: you're *in Play* (review, policies, a
+  listing), Google has *custody*, and it's not sideload. The studio is irrelevant to this user.
+- **"Sideload, control, GCU holds nothing"** → the studio. And the pain here is *mostly not the
+  signing*: the studio auto-generates a **StrongBox key on first run and signs silently** (the user
+  never manages a key — it's `attest`'s mechanism). The residual friction is Google's *one-time
+  developer registration* (fingerprint + identity), required for certified-device install *however*
+  you sign — free 20-device tier for personal use. So "sovereign but nearly painless" is real.
+
+There is **no Google service that signs a *sideloaded* APK for you** (Play App Signing is Play-only;
+Cloud KMS/HSM is enterprise GCP + network, rejected on posture). And a **GCU-run signing service**
+would be off-brand — it reintroduces a server *and* key custody (the two things the posture avoids),
+merely relocated from Google to GCU. So: make the local StrongBox path painless; the truly-managed
+option is honestly just Play.
+
 ## Two-homes context
 
 For every capability that runs in a **browser** — most of wuffle, since `deviceorientation` works in
