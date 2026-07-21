@@ -47,8 +47,25 @@ Signing is a **`yksign` plugin** (`attest`'s external-hardware cousin; sits by `
 - **Zero key custody.** GCU only ever sends a digest and receives a signature. Not the key, not a
   copy, not escrow. The strongest possible "we don't hold the user's key."
 
-**Right door: PIV, not WebAuthn.** WebAuthn signs a fixed auth structure (challenge + authenticator
-data), not an arbitrary digest — wrong shape for code signing. PIV is the raw-signing door.
+**Right door: PIV/StrongBox, not WebAuthn.** WebAuthn/FIDO (and passkeys) sign a fixed *auth*
+structure (challenge + authenticator data), not an arbitrary digest — wrong shape for code signing,
+and the reason a YubiKey's *FIDO* mode can't do this. The raw-signing doors are PIV (YubiKey) and
+the Android Keystore (StrongBox). Google Authenticator is a TOTP generator — no signing key at all,
+not a candidate.
+
+### Where the key lives — a spectrum (verification registers only the fingerprint, so it doesn't care)
+
+The studio shouldn't *require* buying a gadget. Same registration, same signature; pick the tradeoff:
+
+| holder | hardware-backed | portable | recoverable | note |
+|---|---|---|---|---|
+| **Phone StrongBox** (`attest`'s mechanism) | yes | no — bound to this phone | no (non-exportable) | **default**: no gadget, key in the phone you hold; proven on the S24+ (`security=strongbox`). It's `attest` pointed at an APK digest — no new primitive. |
+| **YubiKey PIV** (`yksign`) | yes | yes — tap any device | no (non-exportable) | the "identity travels off the phone" upgrade |
+| **Software keystore** (`.jks`/`.p12` + passphrase) | no | yes | yes — back up the file | the "I want backups" middle; key touched software |
+| ~~Cloud HSM / remote signer~~ | yes | yes | provider-managed | **rejected** — moves custody to a provider + needs network; fights the posture |
+
+Non-exportable holders (StrongBox, YubiKey) share the recovery hazard below — the pre-provisioned
+successor lineage matters *more* for StrongBox, since a replaced phone takes the key with it.
 
 ## Google developer verification — fingerprint, not custody
 
