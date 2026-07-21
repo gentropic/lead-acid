@@ -75,10 +75,17 @@ it registers a *public fingerprint*, not the key:
 - **Register** your package name + your signing key's **SHA-256 fingerprint** under a verified
   developer identity. Google records the *public fingerprint* — never the private key. Every future
   build signed by that YubiKey then passes automatically.
-- **Two account tiers:** the full account is a one-time **$25 + gov ID** (for GCU or a real dev);
-  the **free "limited distribution" account** (no ID, no fee) covers **up to 20 devices** for
-  personal/testing use — perfect for the sovereign-hobbyist signing their own instruments for their
-  own phone(s). (Brazil is first wave, 2026-09-30.)
+- **Two account tiers, and the caps are simple:** **free limited** (no ID, no fee) = **20 devices**;
+  **full verification** ($25 + one government-ID photo, one-time) = **unlimited installs**. That $25+ID
+  is the *entire* "dance" to distribute widely with your own key — "sideloading a verified app works
+  exactly as it always has, no extra steps, no waiting." (Brazil is first wave, 2026-09-30.)
+- **Red herrings from *other* regimes:** the **12-testers-for-14-days** rule is a *Play Store*
+  production-publishing gate for new personal Play accounts — irrelevant to sideload. A **DUNS
+  number** is for *organization* accounts — a solo person verifies with a gov ID, never DUNS. Neither
+  gates the sovereign sideload path.
+- **`adb install` on your OWN devices is unaffected entirely** — no account, no verification (it's
+  how we install the spike all session). Verification only matters when *someone else's* certified
+  phone installs your sideloaded APK.
 - **The custody grab is a *different* mechanism.** **Play App Signing** (Play distribution) is where
   Google holds the final key — so lead-acid **sideloads** and never touches it. Verification wanted
   *accountability* (a verified identity behind each key); the fingerprint model gives that *without*
