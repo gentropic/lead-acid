@@ -43,7 +43,11 @@ does.
 (unsigned output without one, v2+v3 schemes with one — verified with apksigner), `bundleRelease`
 AABs, and **wuffle as an instrument** (`wuffle/`): its artifact syncs from the monorepo build at
 build time, it declares no plugin modules (core covers it), and its merged manifest carries no
-permission. See `docs/signing.md`. Next: **Phase 3** — the pack script + stranger-facing docs.
+permission. See `docs/signing.md`.
+
+**M2 Phase 3 DONE** (2026-10-06): `pack-instrument.mjs` stamps a named instrument out of the
+template in one command, and this README is the stranger's recipe. **M2 is complete.** Still
+owed on-device: the bench battery re-run after the module split (no phone was attached).
 
 ## Building
 
@@ -58,6 +62,45 @@ gradlew.bat assembleDebug      # every module; the apps land at
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 gradlew.bat :wuffle:assembleRelease :wuffle:bundleRelease   # signed iff keystore.properties — docs/signing.md
 ```
+
+## Make an instrument (the five-minute recipe)
+
+You have a single-file HTML tool. You want it on a phone with the parts of Android a browser
+tab can't reach. Three commands:
+
+```
+# 1. stamp a module out of the template — id, label, the plugins it needs, the artifact
+node pack-instrument.mjs compass --id org.example.compass --label "Compass" \
+     --plugins sensor,share --artifact path/to/compass.html
+
+# 2. build it (debug for your own phone; release + bundle per docs/signing.md)
+gradlew.bat :compass:assembleDebug
+
+# 3. install it
+adb install -r compass/build/outputs/apk/debug/compass-debug.apk
+```
+
+What the stamp does: copies `template/`, sets the namespace + `applicationId`, the label, writes
+the plugin list into BOTH places that must agree (the Gradle dependencies and the activity's
+factory list), drops your artifact at `src/main/assets/artifact.html`, and adds the module to
+`settings.gradle.kts`. Re-running it on the same name regenerates those files in place and keeps
+your artifact unless you pass `--artifact` again. Available plugins: `sensor`, `share`,
+`attest`; none is also fine (wuffle runs on core alone). Permissions follow the plugins — the
+stamped manifest requests nothing itself.
+
+Your artifact doesn't need to know about the shell. If it wants native features, it imports
+`./lead-acid.js` (served next to it by core) and feature-detects `shell.present`; the same file
+keeps working in a desktop browser with those features simply absent, and `bench.js` mocks the
+native side for desktop development (SPEC §4.7).
+
+To swap the icon, replace `src/main/res/drawable/ic_launcher_foreground.xml` (an adaptive-icon
+foreground: 108 dp canvas, keep content inside the central 72 dp) and the background colour in
+`res/values/colors.xml`.
+
+**The yearly ratchet.** Google requires `targetSdk` to track the current platform within about a
+year of each release. It lives in ONE place — `gradle/libs.versions.toml`, `targetSdk` (and
+`compileSdk` alongside) — so every instrument built from this repo moves together with a
+one-line change. Rebuild, re-run the bench on a device of that version, ship.
 
 ## Layout
 

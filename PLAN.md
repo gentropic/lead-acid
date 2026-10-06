@@ -205,8 +205,8 @@ packaging recipe — behind something the user would actually carry.
 
 > **Phase 1 (module split + plugin registration) BUILT 2026-10-06** — see
 > `docs/m2-phase1-modules.md`. **Phase 2 (signing + release + the wuffle app) BUILT the same
-> day** — `docs/signing.md`, `wuffle/`. Phase 3 = the pack script + stranger-facing docs + the
-> yearly-ratchet note.
+> day** — `docs/signing.md`, `wuffle/`. **Phase 3 (pack-instrument.mjs + the README recipe +
+> the ratchet note) BUILT the same day.** M2 is complete bar the on-device bench re-run.
 
 The five-minute recipe for a stranger (`template/` app project, one-commit
 `targetSdkVersion` catalog entry for the yearly ratchet). `lead-acid.js` (feature-detect +
