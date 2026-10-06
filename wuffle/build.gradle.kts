@@ -86,4 +86,5 @@ tasks.matching { it.name.startsWith("generate") || it.name.startsWith("merge") }
 dependencies {
     implementation(project(":core"))
     implementation(project(":plugin-sensor"))   // v2: the fused rotation vector + compass accuracy
+    implementation(project(":plugin-attest"))   // v2: the published log is signed with the phone's hardware key
 }
