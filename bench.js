@@ -46,7 +46,9 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', deliverPort);
   else deliverPort();
 
-  function push(sid, event, dataJson) { shellSide.postMessage(JSON.stringify({ s: sid, e: event, d: dataJson })); }
+  // The real shell splices the plugin's JSON into the message as an OBJECT
+  // (`"d":$data`), so the page sees m.d parsed — never a string. Match it.
+  function push(sid, event, dataJson) { shellSide.postMessage(JSON.stringify({ s: sid, e: event, d: typeof dataJson === 'string' ? JSON.parse(dataJson) : dataJson })); }
   function pushClose(sid) { shellSide.postMessage(JSON.stringify({ s: sid, close: true })); }
   function awaitBody(id) {
     return new Promise(function (res) {

@@ -5,10 +5,10 @@
 // with -Pleadacid.artifactsDir=…). The synced file is gitignored: an input, not
 // a source of this repo.
 //
-// wuffle needs nothing beyond core today (keepAwake, fs/publish, the shim) —
-// so it declares no plugin modules and its merged manifest carries no
-// permission and no provider. When v2 wires the sensor plugin, both the
-// dependency below and WuffleActivity.plugins grow by one line.
+// wuffle v2 reads the FUSED rotation vector through the sensor plugin (no
+// permission — not a body sensor), so its merged manifest still carries no
+// permission and no provider; the dependency below and WuffleActivity.plugins
+// are the two lines that agree on it.
 import java.util.Properties
 
 plugins {
@@ -85,4 +85,5 @@ tasks.matching { it.name.startsWith("generate") || it.name.startsWith("merge") }
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":plugin-sensor"))   // v2: the fused rotation vector + compass accuracy
 }

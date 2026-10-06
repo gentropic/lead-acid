@@ -185,5 +185,79 @@ export const shell = (() => {
     };
   }
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend };
+
+  // Fused orientation off the sensor plugin's rotation vector (SPEC §5.1) —
+  // the survey-grade path, as opposed to deviceorientationabsolute which
+  // WebView derives from the same sensor but hides the accuracy. Readings
+  // arrive in the W3C deviceorientation convention so an artifact feeds them
+  // to whatever already consumed the event (bearing's compass.*). `accuracy`
+  // is Android's SensorManager.SENSOR_STATUS_*: 3 high · 2 medium · 1 low ·
+  // 0 unreliable (figure-8 to recalibrate) · -1 no contact.
+  async function orientation({ rateHz = 30, source = 'rotation' } = {}) {
+    const s = await stream(`sensor/stream?types=${encodeURIComponent(source)}&rateHz=${rateHz}`);
+    const readers = new Set(), accs = new Set();
+    let accuracy = null;
+    s.on(source, (d) => {
+      const o = orientationFromRotationVector(d.v);
+      if (!o) return;
+      if (d.acc !== accuracy) { accuracy = d.acc; for (const cb of accs) cb(accuracy); }
+      o.absolute = source !== 'game_rotation';
+      o.accuracy = accuracy;
+      o.t = d.t;
+      for (const cb of readers) cb(o);
+    });
+    s.on('accuracy', (d) => { accuracy = d.acc; for (const cb of accs) cb(accuracy); });
+    const api = {
+      on(cb) { readers.add(cb); return api; },
+      onAccuracy(cb) { accs.add(cb); return api; },
+      onClose(cb) { s.onClose(cb); return api; },
+      close() { s.close(); },
+    };
+    return api;
+  }
+
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector };
 })();
+
+/**
+ * Android rotation vector (x, y, z[, w] = axis·sin θ/2, cos θ/2) → the W3C
+ * deviceorientation triple { alpha, beta, gamma } in degrees, with the spec's
+ * ranges: alpha [0, 360), beta [-180, 180), gamma [-90, 90). Both describe the
+ * same thing — the rotation taking device axes (x right, y top, z out of the
+ * screen) to the Earth frame (x East, y North, z Up) — so this is the quaternion
+ * → matrix → Z-X'-Y'' Tait-Bryan decomposition the spec defines, with the
+ * face-down half handled by the sign of R22 (= cos β cos γ, and |γ| < 90°).
+ * Pure; exported for tests. Returns null for a degenerate vector.
+ */
+export function orientationFromRotationVector(v) {
+  if (!v || v.length < 3) return null;
+  let [x, y, z] = v;
+  let w = v.length > 3 ? v[3] : Math.sqrt(Math.max(0, 1 - x * x - y * y - z * z));
+  const n = Math.hypot(x, y, z, w);
+  if (!(n > 0)) return null;
+  x /= n; y /= n; z /= n; w /= n;
+  // SensorManager.getRotationMatrixFromVector — device → world (ENU), row-major.
+  const r01 = 2 * x * y - 2 * z * w;
+  const r11 = 1 - 2 * x * x - 2 * z * z;
+  const r20 = 2 * x * z - 2 * y * w;
+  const r21 = 2 * y * z + 2 * x * w;
+  const r22 = 1 - 2 * x * x - 2 * y * y;
+  const D = 180 / Math.PI;
+  let alpha, beta, gamma;
+  if (r22 >= 0) {            // screen up: cos β ≥ 0
+    alpha = Math.atan2(-r01, r11);
+    beta = Math.asin(Math.max(-1, Math.min(1, r21)));
+    gamma = Math.atan2(-r20, r22);
+  } else {                   // screen down: cos β < 0 → fold β past ±90°
+    alpha = Math.atan2(r01, -r11);
+    beta = Math.PI - Math.asin(Math.max(-1, Math.min(1, r21)));
+    gamma = Math.atan2(r20, -r22);
+  }
+  alpha *= D; beta *= D; gamma *= D;
+  alpha = ((alpha % 360) + 360) % 360;
+  if (beta >= 180) beta -= 360;
+  if (beta < -180) beta += 360;
+  if (gamma >= 90) gamma -= 180;      // keep the spec's half-open [-90, 90)
+  if (gamma < -90) gamma += 180;
+  return { alpha, beta, gamma };
+}

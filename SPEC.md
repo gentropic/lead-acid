@@ -185,7 +185,11 @@ Feature-detection means the same artifact runs on desktop (where `shell.present`
 
 **BUILT + validated (2026-07-19).** `lead-acid.js` ships: `present`, `native`, `stream`,
 `version`, `keepAwake`, `files`, `fileSource(token)` (a duck-typed `readRange` source lamina/
-micro consume directly), and `fsBackend(Backend)` (the `@gcu/vfs` adapter). On device: all pass,
+micro consume directly), `fsBackend(Backend)` (the `@gcu/vfs` adapter), and — since 2026-10-06 —
+`orientation({rateHz})`: the `sensor` plugin's fused rotation vector delivered as W3C
+`{alpha, beta, gamma, absolute, accuracy}` readings (`orientationFromRotationVector` is the pure,
+exported conversion), so an artifact that consumed `deviceorientation` feeds the same code and
+gains the compass accuracy the event hides. On device: all pass,
 the adapter's `readRange` rides the mmap path (14.3× per read). **The non-Sealed default:** since
 Sealed artifacts can't fetch under `connect-src 'none'`, `/native/fs` is the default *read* path
 for **non-Sealed** GCU artifacts — mount `shell.fsBackend` and every `readRange` gets the mmap
