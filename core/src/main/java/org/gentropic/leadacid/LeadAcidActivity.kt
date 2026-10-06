@@ -1,6 +1,7 @@
 package org.gentropic.leadacid
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -31,63 +32,105 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * The trench coat (SPEC §3). Spike-0 edition: WebView + asset loading +
- * "/native/…" interceptor + one registered plugin. An app subclasses this to
- * declare its plugin list; the spike declares FilePlugin inline.
+ * The trench coat (SPEC §3): WebView + asset loading + the "/native/…"
+ * interceptor + the port lanes + the §7 obligations. An instrument subclasses
+ * this and declares its capabilities:
+ *
+ *     class WuffleActivity : LeadAcidActivity() {
+ *         override val plugins = listOf(Sensor, Share, Attest)
+ *     }
+ *
+ * `fs` and `shell` are always registered; the list adds the rest. The
+ * activity is also the [PluginHost] plugins draw on.
  * (Kotlin block comments NEST — never write /native/ followed by two stars in a comment.)
  */
-class LeadAcidActivity : ComponentActivity() {
+open class LeadAcidActivity : ComponentActivity(), PluginHost {
 
     companion object {
         const val ORIGIN = "appassets.androidplatform.net"
-        /** 8 MiB, byte[i] = i mod 251 — verifiable from JS at any offset. */
-        const val TEST_FILE_SIZE = 8L * 1024 * 1024
-        const val FILE_CHOOSER_REQ = 71
+        private const val BODY_ID_LEN = 12
+        private const val BODY_HEADER = "X-LeadAcid-Body-Id"
     }
 
-    private lateinit var webView: WebView
-    private val plugins = HashMap<String, Plugin>()
+    /** The instrument's capabilities. Override with a list of plugin factories. */
+    open val plugins: List<PluginFactory> = emptyList()
+
+    /**
+     * Files served as built-in fs tokens (GET /native/fs/{token}). Called once
+     * in onCreate, so it may touch `filesDir` etc. Default: none.
+     */
+    open fun builtinFiles(): Map<String, File> = emptyMap()
+
+    /** The artifact to load. Debug builds honor `--es artifact <name>.html`. */
+    open fun artifactName(): String = "artifact.html"
+
+    protected lateinit var webView: WebView
+    private val registry = HashMap<String, Plugin>()
 
     /** Debug builds only: dispatch logging + page-console mirroring to logcat. */
-    private val debuggable: Boolean by lazy {
+    protected val debuggable: Boolean by lazy {
         (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
 
-    private var fileChooserCallback: android.webkit.ValueCallback<Array<Uri>>? = null
-
     /** The fs plugin — created once so it can hold SAF-fd maps across requests. */
-    private val filePlugin by lazy {
-        FilePlugin(mapOf("spike0.bin" to File(filesDir, "spike0.bin")), ::publishToMediaStore)
-    }
-
-    private val sensorPlugin by lazy {
-        SensorPlugin(getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager, pushBus)
-    }
+    private val filePlugin by lazy { FilePlugin(builtinFiles(), ::publishToMediaStore) }
 
     /** Fullscreen (§7c): the custom view an artifact hands us via onShowCustomView. */
     private var customView: View? = null
     private var customViewCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
-    private var pendingGeolocation: Pair<String, GeolocationPermissions.Callback>? = null
-    private var pendingPermissionRequest: PermissionRequest? = null
 
-    private val PERM_LOCATION = 81
-    private val PERM_CAMERA = 82
+    // ── PluginHost: result + permission routing ─────────────────────────────
+    // Request codes are allocated here; handlers are one-shot. Core's own
+    // needs (the §7c file chooser, geolocation, getUserMedia) go through the
+    // same door as a plugin's.
+    private val reqSeq = AtomicInteger(1000)
+    private val resultHandlers = ConcurrentHashMap<Int, (Int, Intent?) -> Unit>()
+    private val permHandlers = ConcurrentHashMap<Int, (Boolean) -> Unit>()
 
-    // The WebMessagePort body sidecar (SPEC §4.3). The page posts [id(12) | body]
-    // over the port; the interceptor (off-thread) awaits the id's bytes here.
+    override val context: Context get() = this
+    override val activity: ComponentActivity get() = this
+
+    override fun startForResult(intent: Intent, handler: (Int, Intent?) -> Unit): Boolean {
+        val code = reqSeq.incrementAndGet()
+        resultHandlers[code] = handler
+        @Suppress("DEPRECATION")
+        return runCatching { startActivityForResult(intent, code) }
+            .onFailure { resultHandlers.remove(code) }
+            .isSuccess
+    }
+
+    override fun hasPermission(perm: String) =
+        ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+
+    override fun requestPermission(perm: String, onResult: (Boolean) -> Unit) {
+        when {
+            hasPermission(perm) -> onResult(true)
+            // Not in the merged manifest → no plugin contributed it → capability absent.
+            !declaresPermission(perm) -> onResult(false)
+            else -> {
+                val code = reqSeq.incrementAndGet()
+                permHandlers[code] = onResult
+                requestPermissions(arrayOf(perm), code)
+            }
+        }
+    }
+
+    // ── The WebMessagePort body sidecar (SPEC §4.3) ─────────────────────────
+    // The page posts [id(12) | body] over the port; the interceptor
+    // (off-thread) awaits the id's bytes here.
     private var shellPort: WebMessagePortCompat? = null
     private val bodyById = ConcurrentHashMap<String, CompletableFuture<ByteArray>>()
-    private val BODY_ID_LEN = 12
-    private val BODY_HEADER = "X-LeadAcid-Body-Id"
 
-    // Push streams (SPEC §4.2 via the port). id → onClose. The shell posts
-    // events over the SAME port, other direction (shell→page); no interceptor,
-    // no buffering. Port ops are main-thread; emit marshals via mainHandler.
+    // ── Push streams (SPEC §4.2 via the port) ───────────────────────────────
+    // id → onClose. The shell posts events over the SAME port, other direction
+    // (shell→page); no interceptor, no buffering. Port ops are main-thread;
+    // emit marshals via mainHandler.
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pushStreams = ConcurrentHashMap<String, () -> Unit>()
-    private val pushSeq = java.util.concurrent.atomic.AtomicInteger(0)
+    private val pushSeq = AtomicInteger(0)
 
     private fun postToPage(json: String) {
         mainHandler.post { runCatching { shellPort?.postMessage(WebMessageCompat(json)) } }
@@ -101,7 +144,7 @@ class LeadAcidActivity : ComponentActivity() {
         for (id in ids) pushStreams.remove(id)?.invoke()
     }
 
-    private val pushBus = object : PushBus {
+    override val pushBus: PushBus = object : PushBus {
         override fun open(onClose: () -> Unit): PortStream {
             val sid = "ps" + pushSeq.incrementAndGet()
             pushStreams[sid] = onClose
@@ -118,13 +161,8 @@ class LeadAcidActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        File(filesDir, "spike0.bin").also(::ensureTestFile)
+        // Always-present plugins, then the instrument's declared list.
         register(filePlugin)
-        register(sensorPlugin)
-        register(SharePlugin(::shareOut))
-        register(AttestPlugin(
-            strongBoxAvailable = packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE),
-        ))
         register(ShellPlugin(
             version = versionName(),
             onKeepAwake = { on ->
@@ -135,11 +173,11 @@ class LeadAcidActivity : ComponentActivity() {
             },
             onCloseStream = ::closePushStream,
         ))
+        for (factory in plugins) register(factory.create(this))
 
-        // §7b: Back. Predictive back is declared in the manifest; this callback
-        // makes the animation reflect what actually happens. Default is honest:
-        // no in-page history → finish. (Artifact-intercept via shell.onBack is a
-        // lead-acid.js addition — the shell would consult a cached back-state.)
+        // §7b: Back. Predictive back is declared in core's manifest; this
+        // callback makes the animation reflect what actually happens. Default
+        // is honest: no in-page history → finish.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (webView.canGoBack()) webView.goBack() else finish()
@@ -186,14 +224,12 @@ class LeadAcidActivity : ComponentActivity() {
 
             // SPEC §7c: file inputs silently no-op without this. SAF picker;
             // ACTION_OPEN_DOCUMENT so the returned URIs are documents-provider
-            // backed (persistable grants + ranged reads later).
+            // backed. Each pick also registers as an fs token (mmap-over-fd).
             override fun onShowFileChooser(
                 view: WebView,
                 callback: android.webkit.ValueCallback<Array<Uri>>,
                 params: FileChooserParams,
             ): Boolean {
-                fileChooserCallback?.onReceiveValue(null)
-                fileChooserCallback = callback
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = "*/*"
@@ -202,9 +238,16 @@ class LeadAcidActivity : ComponentActivity() {
                         params.mode == FileChooserParams.MODE_OPEN_MULTIPLE,
                     )
                 }
-                return runCatching { startActivityForResult(intent, FILE_CHOOSER_REQ) }
-                    .onFailure { fileChooserCallback = null }
-                    .isSuccess
+                val launched = startForResult(intent) { resultCode, data ->
+                    val uris = if (resultCode == RESULT_OK && data != null) {
+                        data.clipData?.let { cd -> Array(cd.itemCount) { cd.getItemAt(it).uri } }
+                            ?: data.data?.let { arrayOf(it) }
+                    } else null
+                    uris?.forEach { filePlugin.registerSaf(it, contentResolver) }
+                    callback.onReceiveValue(uris)
+                }
+                if (!launched) callback.onReceiveValue(null)
+                return launched
             }
 
             // §7c: fullscreen (immersive artifacts, video). Add the custom view
@@ -230,19 +273,15 @@ class LeadAcidActivity : ComponentActivity() {
             }
 
             // §7c: standard web geolocation. Granted iff the app holds the
-            // Android permission (base manifest requests none — §8; a location
-            // plugin's manifest merge is what turns this on for an app).
+            // Android permission; requestPermission already refuses what the
+            // merged manifest doesn't declare (a location plugin's merge is
+            // what turns this on for an instrument).
             override fun onGeolocationPermissionsShowPrompt(
                 origin: String,
                 callback: GeolocationPermissions.Callback,
             ) {
-                if (hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
-                    callback.invoke(origin, true, false)
-                } else if (declaresPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
-                    pendingGeolocation = origin to callback
-                    requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), PERM_LOCATION)
-                } else {
-                    callback.invoke(origin, false, false)   // capability absent
+                requestPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) { granted ->
+                    callback.invoke(origin, granted, false)
                 }
             }
 
@@ -251,13 +290,9 @@ class LeadAcidActivity : ComponentActivity() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
                 if (!wantsCamera) { request.deny(); return }
-                if (hasPermission(android.Manifest.permission.CAMERA)) {
-                    request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
-                } else if (declaresPermission(android.Manifest.permission.CAMERA)) {
-                    pendingPermissionRequest = request
-                    requestPermissions(arrayOf(android.Manifest.permission.CAMERA), PERM_CAMERA)
-                } else {
-                    request.deny()   // capability absent
+                requestPermission(android.Manifest.permission.CAMERA) { granted ->
+                    if (granted) request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                    else request.deny()
                 }
             }
         }
@@ -321,22 +356,22 @@ class LeadAcidActivity : ComponentActivity() {
         // Dev switcher (debug builds): `adb shell am start … --es artifact micro.html`
         // loads a different asset without a rebuild. Release ignores the extra.
         val artifact = (if (debuggable) intent.getStringExtra("artifact") else null)
-            ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]+")) } ?: "artifact.html"
+            ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]+")) } ?: artifactName()
         webView.loadUrl("https://$ORIGIN/assets/$artifact")
     }
 
     private fun register(plugin: Plugin) {
-        plugins[plugin.name] = plugin
+        require(registry.put(plugin.name, plugin) == null) { "duplicate plugin: ${plugin.name}" }
     }
 
-    /** /native/{plugin}/{subpath…} → PluginRegistry dispatch (SPEC §3). */
+    /** /native/{plugin}/{subpath…} → registry dispatch (SPEC §3). */
     private fun dispatch(request: WebResourceRequest, path: String): WebResourceResponse {
         val rest = path.removePrefix("/native/")
         val slash = rest.indexOf('/')
         val pluginName = if (slash < 0) rest else rest.substring(0, slash)
         val subpath = if (slash < 0) "" else rest.substring(slash + 1)
 
-        val plugin = plugins[pluginName]
+        val plugin = registry[pluginName]
             ?: return BridgeResponse.error(404, "Not Found", "no plugin: $pluginName").toWebResponse()
 
         val query = HashMap<String, String>()
@@ -373,21 +408,20 @@ class LeadAcidActivity : ComponentActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == FILE_CHOOSER_REQ) {
-            val cb = fileChooserCallback
-            fileChooserCallback = null
-            val uris = if (resultCode == RESULT_OK && data != null) {
-                data.clipData?.let { cd -> Array(cd.itemCount) { cd.getItemAt(it).uri } }
-                    ?: data.data?.let { arrayOf(it) }
-            } else null
-            // Register each picked SAF document as an fs token, so the artifact
-            // can also reach it via GET /native/fs/<token> (mmap-over-fd path).
-            uris?.forEach { filePlugin.registerSaf(it, contentResolver) }
-            cb?.onReceiveValue(uris)
-            return
-        }
+        val handler = resultHandlers.remove(requestCode)
+        if (handler != null) { handler(resultCode, data); return }
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        permHandlers.remove(requestCode)?.invoke(granted)
     }
 
     /**
@@ -463,30 +497,6 @@ class LeadAcidActivity : ComponentActivity() {
         }
     }
 
-    /** share plugin backend: ACTION_SEND a file (FileProvider) or text, via the chooser. */
-    private fun shareOut(name: String, mime: String, text: String?, bytes: ByteArray?): Boolean = try {
-        val send = Intent(Intent.ACTION_SEND)
-        if (text != null) send.putExtra(Intent.EXTRA_TEXT, text)
-        if (bytes != null) {
-            val dir = File(cacheDir, "share").apply { mkdirs() }
-            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "shared" }
-            val f = File(dir, safe).apply { writeBytes(bytes) }
-            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
-            send.type = mime
-            send.putExtra(Intent.EXTRA_STREAM, uri)
-            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } else {
-            send.type = "text/plain"
-        }
-        startActivity(Intent.createChooser(send, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        true
-    } catch (e: Exception) {
-        android.util.Log.e("leadacid", "shareOut failed", e); false
-    }
-
-    private fun hasPermission(perm: String) =
-        ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
-
     /** Is the permission even in this app's merged manifest? (Plugin-merge gate.) */
     private fun declaresPermission(perm: String): Boolean = runCatching {
         packageManager.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
@@ -496,24 +506,6 @@ class LeadAcidActivity : ComponentActivity() {
     private fun versionName(): String = runCatching {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "0"
     }.getOrDefault("0")
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray,
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
-        when (requestCode) {
-            PERM_LOCATION -> pendingGeolocation?.let { (origin, cb) ->
-                cb.invoke(origin, granted, false); pendingGeolocation = null
-            }
-            PERM_CAMERA -> pendingPermissionRequest?.let { req ->
-                if (granted) req.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) else req.deny()
-                pendingPermissionRequest = null
-            }
-        }
-    }
 
     override fun onPause() {
         // SPEC §5 background stance: the WebView doesn't run in the background,
@@ -526,20 +518,5 @@ class LeadAcidActivity : ComponentActivity() {
     override fun onDestroy() {
         webView.destroy()
         super.onDestroy()
-    }
-
-    /** Deterministic pattern file: byte[i] = i mod 251 (largest prime < 256). */
-    private fun ensureTestFile(file: File) {
-        if (file.exists() && file.length() == TEST_FILE_SIZE) return
-        val chunk = ByteArray(64 * 1024)
-        file.outputStream().buffered().use { out ->
-            var written = 0L
-            while (written < TEST_FILE_SIZE) {
-                for (j in chunk.indices) chunk[j] = ((written + j) % 251).toByte()
-                val n = minOf(chunk.size.toLong(), TEST_FILE_SIZE - written).toInt()
-                out.write(chunk, 0, n)
-                written += n
-            }
-        }
     }
 }

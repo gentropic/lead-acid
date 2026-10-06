@@ -203,6 +203,10 @@ packaging recipe — behind something the user would actually carry.
 
 ### M2 — template, bench & docs *(mostly bounded work I can produce)*
 
+> **Phase 1 (module split + plugin registration) BUILT 2026-10-06** — see
+> `docs/m2-phase1-modules.md`. Phase 2 = signing + release + the wuffle app; Phase 3 = the pack
+> script + stranger-facing docs + the yearly-ratchet note.
+
 The five-minute recipe for a stranger (`template/` app project, one-commit
 `targetSdkVersion` catalog entry for the yearly ratchet). `lead-acid.js` (feature-detect +
 `native`/`stream`/`onBack`/`keepAwake`) and `bench.js` (desktop `/native/**` fetch shim with

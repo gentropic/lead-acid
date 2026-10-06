@@ -1,0 +1,55 @@
+<!doctype html>
+<!--
+  The template's placeholder artifact. Replace this file with your built
+  single-file tool (micro.html, wuffle.html, …) — nothing else in the project
+  needs to change. It runs unmodified on the desktop too: the shell module is
+  feature-detected, and native features are simply absent there.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lead-acid instrument</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px; background: #121314; color: #e6e3dc;
+         font: 15px/1.5 "Barlow", system-ui, sans-serif; }
+  h1 { font: 500 22px/1.2 "Space Mono", ui-monospace, monospace; margin: 0 0 4px; }
+  .muted { color: #8a8780; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 20px 0; }
+  dt { color: #8a8780; } dd { margin: 0; font-family: ui-monospace, monospace; }
+  button { font: inherit; padding: 10px 16px; border: 1px solid #3a3a3a; border-radius: 6px;
+           background: #1e1f21; color: #f0a040; cursor: pointer; }
+  button:disabled { color: #555; }
+</style>
+</head>
+<body>
+<h1>lead-acid instrument</h1>
+<div class="muted">the template artifact — swap in your own</div>
+
+<dl>
+  <dt>shell</dt><dd id="present">…</dd>
+  <dt>version</dt><dd id="version">—</dd>
+  <dt>fs tokens</dt><dd id="files">—</dd>
+</dl>
+
+<button id="share" disabled>share a note</button>
+
+<!-- Import the shell module EARLY so its port listener is registered when the
+     shell posts the WebMessagePort (deferred module: before onPageFinished). -->
+<script type="module">
+  import { shell } from './lead-acid.js';
+  window.__shell = shell;
+  const $ = (s) => document.querySelector(s);
+  $('#present').textContent = shell.present ? 'present' : 'absent (desktop)';
+  if (shell.present) {
+    $('#version').textContent = await shell.version();
+    const files = await shell.files();
+    $('#files').textContent = files.length ? files.map((f) => `${f.token} (${f.size} B)`).join(', ') : 'none';
+    const btn = $('#share');
+    btn.disabled = false;
+    btn.onclick = () => shell.shareText('hello from a lead-acid instrument');
+  }
+</script>
+</body>
+</html>

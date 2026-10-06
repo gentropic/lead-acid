@@ -1,18 +1,21 @@
+// app — the dev / kitchen-sink harness: core + EVERY plugin module, hosting any
+// artifact (`--es artifact <name>.html` on debug builds) and carrying the bench
+// page. This is our development + on-device-test app, not an instrument.
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
 
 android {
-    namespace = "org.gentropic.leadacid"
+    namespace = "org.gentropic.leadacid.app"
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "org.gentropic.leadacid.spike"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.0-spike0"
+        versionCode = 2
+        versionName = "0.1-m2"
     }
 
     buildTypes {
@@ -31,7 +34,8 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.webkit)
-    implementation(libs.androidx.core)
-    implementation(libs.androidx.activity)
+    implementation(project(":core"))
+    implementation(project(":plugin-sensor"))
+    implementation(project(":plugin-share"))
+    implementation(project(":plugin-attest"))
 }

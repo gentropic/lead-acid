@@ -1,6 +1,14 @@
-package org.gentropic.leadacid
+package org.gentropic.leadacid.sensor
 
-import android.hardware.Sensor
+import android.content.Context
+import org.gentropic.leadacid.BridgeRequest
+import org.gentropic.leadacid.BridgeResponse
+import org.gentropic.leadacid.Plugin
+import org.gentropic.leadacid.PluginFactory
+import org.gentropic.leadacid.PortStream
+import org.gentropic.leadacid.PushBus
+
+import android.hardware.Sensor as HwSensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
@@ -33,13 +41,13 @@ class SensorPlugin(
     private val handler = Handler(thread.looper)
 
     private val byName = linkedMapOf(
-        "rotation" to Sensor.TYPE_ROTATION_VECTOR,               // fused orientation (best compass)
-        "geomag_rotation" to Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR, // mag+accel, no gyro drift
-        "game_rotation" to Sensor.TYPE_GAME_ROTATION_VECTOR,
-        "magnetic" to Sensor.TYPE_MAGNETIC_FIELD,
-        "magnetic_uncal" to Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, // raw, for calibration state
-        "accel" to Sensor.TYPE_ACCELEROMETER,
-        "gravity" to Sensor.TYPE_GRAVITY,
+        "rotation" to HwSensor.TYPE_ROTATION_VECTOR,               // fused orientation (best compass)
+        "geomag_rotation" to HwSensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR, // mag+accel, no gyro drift
+        "game_rotation" to HwSensor.TYPE_GAME_ROTATION_VECTOR,
+        "magnetic" to HwSensor.TYPE_MAGNETIC_FIELD,
+        "magnetic_uncal" to HwSensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, // raw, for calibration state
+        "accel" to HwSensor.TYPE_ACCELEROMETER,
+        "gravity" to HwSensor.TYPE_GRAVITY,
     )
     private val nameByType = byName.entries.associate { (k, v) -> v to k }
 
@@ -74,7 +82,7 @@ class SensorPlugin(
                 val v = e.values.joinToString(",") { it.toString() }
                 stream.emit(n, """{"t":${e.timestamp},"v":[$v],"acc":${e.accuracy}}""")
             }
-            override fun onAccuracyChanged(s: Sensor, acc: Int) {
+            override fun onAccuracyChanged(s: HwSensor, acc: Int) {
                 val n = nameByType[s.type] ?: return
                 stream.emit("accuracy", """{"sensor":${BridgeResponse.jsonStr(n)},"acc":$acc}""")
             }
@@ -84,4 +92,12 @@ class SensorPlugin(
 
         return BridgeResponse.json(200, "OK", """{"stream":${BridgeResponse.jsonStr(stream.id)}}""")
     }
+}
+
+/**
+ * The factory an instrument lists: `override val plugins = listOf(Sensor, …)`.
+ * (It shadows android.hardware.Sensor in this file — hence the HwSensor alias above.)
+ */
+val Sensor = PluginFactory { host ->
+    SensorPlugin(host.context.getSystemService(Context.SENSOR_SERVICE) as SensorManager, host.pushBus)
 }

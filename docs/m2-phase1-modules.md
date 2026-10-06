@@ -1,6 +1,12 @@
 # M2 Phase 1 — the module split + plugin registration
 
 **Design of record for turning lead-acid from one bespoke app into a reusable jig.**
+
+> **BUILT 2026-10-06.** Modules, factories, host, template — all as below, with the deviations
+> recorded in "What landed differently" at the end. Verification: items 2–3 done (JS untouched;
+> the FileProvider witness holds: template without `plugin-share` → 0 providers, with → 1).
+> Item 1 (the on-device bench battery) is **pending a plugged-in phone** — the refactor moved
+> code without changing behavior, but it has not yet been re-run on the S24+.
 Phase 1 only: the Gradle module split, the plugin-registration API, and the manifest-merge model.
 Signing / release / wuffle-app are Phase 2; the pack script + stranger-docs are Phase 3.
 
@@ -109,6 +115,31 @@ The permission version of the proof lands with the first perm-bearing plugin (`g
 Signing config + release build (AAB/APK) + wuffle-app = **Phase 2**. The `pack-instrument` script +
 stranger-facing README + the yearly-ratchet doc = **Phase 3**. Publishing `core` as a Maven
 artifact / template repo = later (in-repo modules for now).
+
+## What landed differently (2026-10-06)
+
+- **`PluginHost.startForResult(intent, handler)` instead of `onActivityResult(code, handler)`.**
+  The host allocates the request code itself (an atomic counter from 1000) and routes the result
+  to the one-shot handler, so no plugin ever sees or chooses a code. Core's own §7c file chooser
+  goes through the same door.
+- **`requestPermission(perm, onResult)` is callback-shaped, not `suspend`.** No plugin needs
+  coroutines yet and `core`'s dependency surface stays webkit + core + activity. It refuses
+  immediately when the merged manifest doesn't declare the permission — the plugin-merge gate —
+  and the §7c geolocation / getUserMedia prompts now ride it instead of their own request codes.
+- **`lead-acid.js` ships as a `core` asset.** A Copy task feeds the root `lead-acid.js` (still the
+  single source of truth the monorepo vendors) into a generated assets dir, so every instrument
+  gets `/assets/lead-acid.js` through the asset merge. The copy that lived in `app/src/main/assets`
+  is gone.
+- **Posture lives in `core`'s manifest.** `allowBackup="false"` + `enableOnBackInvokedCallback`
+  are declared once there and inherited; an instrument's manifest holds only its label, theme and
+  Activity.
+- **`builtinFiles()` is a function, not a property** — it touches `filesDir`, which a property
+  initializer would reach before the Context is attached. `artifactName()` likewise.
+- **Factory naming settled on the terse top-level object** (`Sensor`, `Share`, `Attest`), which in
+  `plugin-sensor` shadows `android.hardware.Sensor` inside its own file — imported there as
+  `HwSensor`.
+- The dev harness's activity is `DevActivity` (namespace `org.gentropic.leadacid.app`, applicationId
+  unchanged so existing installs update in place); the template's is `InstrumentActivity`.
 
 ## Genuinely open questions
 

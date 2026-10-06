@@ -1,4 +1,10 @@
-package org.gentropic.leadacid
+package org.gentropic.leadacid.attest
+
+import android.content.pm.PackageManager
+import org.gentropic.leadacid.BridgeRequest
+import org.gentropic.leadacid.BridgeResponse
+import org.gentropic.leadacid.Plugin
+import org.gentropic.leadacid.PluginFactory
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
@@ -116,4 +122,11 @@ class AttestPlugin(private val strongBoxAvailable: Boolean) : Plugin {
         place(r, 0); place(s, 32)
         return out
     }
+}
+
+/** The factory an instrument lists. StrongBox is a hint from the host's hardware. */
+val Attest = PluginFactory { host ->
+    AttestPlugin(
+        strongBoxAvailable = host.context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE),
+    )
 }

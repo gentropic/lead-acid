@@ -1,15 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Default posture: no permissions. Not even INTERNET (SPEC §8). -->
+<!--
+  The dev harness's manifest declares only what is ITS: label, theme, the
+  activity. Posture (no backup, predictive back) comes from core's manifest;
+  the share FileProvider from plugin-share's. Still no permissions (SPEC §8).
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
-        android:label="lead-acid spike 0"
-        android:allowBackup="false"
-        android:enableOnBackInvokedCallback="true"
+        android:label="lead-acid dev"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
-            android:name=".LeadAcidActivity"
+            android:name=".DevActivity"
             android:exported="true"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation">
@@ -18,16 +20,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- share plugin: expose transient cache files to the system share sheet -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
     </application>
 </manifest>

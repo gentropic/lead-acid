@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  core's manifest requests NOTHING — not a permission, not INTERNET (SPEC §8).
+  What it does carry is the posture every instrument inherits through the merge:
+  no auto-backup (the default would ship app data to the user's Google account,
+  quietly falsifying "transmits nothing"), and predictive back. The instrument
+  declares its own Activity (a LeadAcidActivity subclass) with the LAUNCHER filter.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true" />
+</manifest>

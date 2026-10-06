@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- sensor plugin: contributes nothing to the merged manifest (no permission needed). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

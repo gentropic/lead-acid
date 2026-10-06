@@ -24,8 +24,20 @@ The artifacts themselves live in the [auditable monorepo](https://github.com/end
 **Spike 0 PASSED** (2026-07-19, S24+ / Android 16 / WebView 150) — ranged `fetch()` through
 `shouldInterceptRequest` round-trips all range forms correctly off a `MappedByteBuffer`,
 65 MB/s on sequential 256 KiB reads. Key finding: the WebView loader applies the Range to the
-plugin's stream itself (see SPEC §4.1 and PLAN.md). Next: **M0**, the trench coat — micro's
-single file, unmodified, rendering a block model off ranged fetch from internal storage.
+plugin's stream itself (see SPEC §4.1 and PLAN.md).
+
+**M0 + M1 DONE** (2026-07-19/21, all on the S24+): micro's single file renders a real 324k-block
+model off the SAF picker; the `fs` plugin serves ranged reads off windowed mmaps (~30× `Blob.slice`
+on scattered reads) and publishes to MediaStore; all three bridge lanes (fetch spine, port body
+sidecar, port push) are proven; plugins `sensor` / `share` / `attest` work; wuffle, the compass,
+graduated to the monorepo; `bench.js` runs the same shim on the desktop with no APK.
+
+**M2 Phase 1 DONE** (2026-10-06): lead-acid is a **jig**, not one app. `core` is an Android
+library (the activity base, the bridge, the port lanes, `fs` + `shell`, and `lead-acid.js` as a
+merged asset); each capability is its own `plugin-*` library module owning its permissions and
+providers; an instrument is a `LeadAcidActivity` subclass with a list of plugin factories. The
+merged-manifest witness holds: a template without `plugin-share` has no FileProvider, with it it
+does. Next: **Phase 2** — signing config, release builds, the wuffle app.
 
 ## Building
 
@@ -33,9 +45,34 @@ Requires the Android SDK (`local.properties` → `sdk.dir`, or `ANDROID_HOME`) a
 (Android Studio's bundled JBR works).
 
 ```
-gradlew.bat assembleDebug      # → app/build/outputs/apk/debug/app-debug.apk
+gradlew.bat assembleDebug      # every module; the two apps land at
+                               #   app/build/outputs/apk/debug/app-debug.apk        (dev harness)
+                               #   template/build/outputs/apk/debug/template-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## Layout
+
+| module | kind | what |
+|---|---|---|
+| `core` | library | the jig: `LeadAcidActivity` (subclass it), the bridge, the WebMessagePort lanes, the §7 shell obligations, the always-present `fs` + `shell` plugins, and `lead-acid.js` served as `/assets/lead-acid.js`. Its manifest requests **nothing**. |
+| `plugin-sensor` | library | streaming sensors over the push lane (no permission) |
+| `plugin-share` | library | the system share sheet — owns the FileProvider + `file_paths.xml` |
+| `plugin-attest` | library | hardware-backed signing in the AndroidKeyStore (StrongBox where available) |
+| `app` | application | the **dev / kitchen-sink harness**: core + every plugin, hosts any artifact (`--es artifact micro.html` on debug builds), carries the bench page |
+| `template` | application | the **copy-me instrument**: core + one plugin + a placeholder artifact — the five-minute starting point |
+
+An instrument is the whole wiring:
+
+```kotlin
+class WuffleActivity : LeadAcidActivity() {
+    override val plugins = listOf(Sensor, Share, Attest)
+}
+```
+
+Each factory comes from a plugin module the instrument's `build.gradle.kts` depends on — the
+dependency is what carries that plugin's permissions into the merged manifest, so an app cannot
+ship a permission whose plugin it didn't include (SPEC §5).
 
 ---
 
