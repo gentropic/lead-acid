@@ -6,6 +6,8 @@
 //      their modules here — the dependency is what carries their permissions)
 //   5. gradlew :<yours>:assembleDebug
 // Nothing else to touch. core brings lead-acid.js and the posture.
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -23,9 +25,30 @@ android {
         versionName = "0.1"
     }
 
+    // SPEC §6: the keystore never enters the repo. A root keystore.properties
+    // (gitignored) signs release; without one, release builds are UNSIGNED.
+    // See docs/signing.md.
+    val ksProps = rootProject.file("keystore.properties")
+    if (ksProps.exists()) {
+        val p = Properties().apply { ksProps.inputStream().use { load(it) } }
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(p.getProperty("storeFile"))
+                storePassword = p.getProperty("storePassword")
+                keyAlias = p.getProperty("keyAlias")
+                keyPassword = p.getProperty("keyPassword")
+                // v3 carries the proof-of-rotation lineage (docs/signing.md) —
+                // AGP leaves it off by default; we want it from the first build.
+                // (minSdk 29 ≥ 28, so AGP then signs v3 alone — v2 is redundant.)
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (ksProps.exists()) signingConfig = signingConfigs.getByName("release")
         }
     }
 

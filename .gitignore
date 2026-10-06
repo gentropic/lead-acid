@@ -34,3 +34,6 @@ experiments/
 # (tools/wuffle → wuffle.html); build it there and copy the output into assets.
 app/src/main/assets/*.html
 !app/src/main/assets/artifact.html
+# Instruments sync their artifact from the monorepo at build time (gradle.properties
+# leadacid.artifactsDir) — never commit the copy.
+wuffle/src/main/assets/

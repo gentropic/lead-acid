@@ -9,6 +9,7 @@
 
     <application
         android:label="lead-acid instrument"
+        android:icon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity

@@ -37,7 +37,13 @@ library (the activity base, the bridge, the port lanes, `fs` + `shell`, and `lea
 merged asset); each capability is its own `plugin-*` library module owning its permissions and
 providers; an instrument is a `LeadAcidActivity` subclass with a list of plugin factories. The
 merged-manifest witness holds: a template without `plugin-share` has no FileProvider, with it it
-does. Next: **Phase 2** — signing config, release builds, the wuffle app.
+does.
+
+**M2 Phase 2 DONE** (2026-10-06): release signing from a gitignored `keystore.properties`
+(unsigned output without one, v2+v3 schemes with one — verified with apksigner), `bundleRelease`
+AABs, and **wuffle as an instrument** (`wuffle/`): its artifact syncs from the monorepo build at
+build time, it declares no plugin modules (core covers it), and its merged manifest carries no
+permission. See `docs/signing.md`. Next: **Phase 3** — the pack script + stranger-facing docs.
 
 ## Building
 
@@ -45,10 +51,12 @@ Requires the Android SDK (`local.properties` → `sdk.dir`, or `ANDROID_HOME`) a
 (Android Studio's bundled JBR works).
 
 ```
-gradlew.bat assembleDebug      # every module; the two apps land at
-                               #   app/build/outputs/apk/debug/app-debug.apk        (dev harness)
+gradlew.bat assembleDebug      # every module; the apps land at
+                               #   app/build/outputs/apk/debug/app-debug.apk            (dev harness)
                                #   template/build/outputs/apk/debug/template-debug.apk
+                               #   wuffle/build/outputs/apk/debug/wuffle-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+gradlew.bat :wuffle:assembleRelease :wuffle:bundleRelease   # signed iff keystore.properties — docs/signing.md
 ```
 
 ## Layout
@@ -61,6 +69,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | `plugin-attest` | library | hardware-backed signing in the AndroidKeyStore (StrongBox where available) |
 | `app` | application | the **dev / kitchen-sink harness**: core + every plugin, hosts any artifact (`--es artifact micro.html` on debug builds), carries the bench page |
 | `template` | application | the **copy-me instrument**: core + one plugin + a placeholder artifact — the five-minute starting point |
+| `wuffle` | application | the geological compass as an instrument — core only; its `artifact.html` syncs from the monorepo's built `wuffle.html` (`gradle.properties` → `leadacid.artifactsDir`) |
 
 An instrument is the whole wiring:
 
