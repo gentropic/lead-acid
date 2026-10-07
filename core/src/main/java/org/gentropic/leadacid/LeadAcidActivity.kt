@@ -87,7 +87,7 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
     }
 
     /** The fs plugin — created once so it can hold SAF-fd maps across requests. */
-    private val filePlugin by lazy { FilePlugin(builtinFiles(), ::publishToMediaStore) }
+    private val filePlugin by lazy { FilePlugin(builtinFiles(), ::openMediaStore) }
 
     /** Fullscreen (§7c): the custom view an artifact hands us via onShowCustomView. */
     private var customView: View? = null
@@ -513,11 +513,13 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
         }
 
     /**
-     * fs/publish backend (SPEC §5.1): insert bytes into a public MediaStore
-     * collection. Scoped-storage (API 29+) — own-contributions need NO storage
-     * permission, and the file survives uninstall + shows in Files/Gallery.
+     * fs/publish backend (SPEC §5.1): a public MediaStore collection, opened as a
+     * STREAMING target — the row is inserted pending, bytes flow to its
+     * OutputStream, `finish` flips IS_PENDING so it appears in Files/Gallery,
+     * `abort` deletes it. Scoped storage (API 29+): own contributions need NO
+     * storage permission and survive uninstall.
      */
-    private fun publishToMediaStore(name: String, collection: String, mime: String, bytes: ByteArray): String? {
+    private fun openMediaStore(name: String, collection: String, mime: String): PublishSink? {
         val (target, relPath) = when (collection.lowercase()) {
             "pictures", "photos", "images" ->
                 android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI to android.os.Environment.DIRECTORY_PICTURES
@@ -534,13 +536,23 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
                 put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = contentResolver.insert(target, values) ?: return null
-            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-            values.clear()
-            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
-            contentResolver.update(uri, values, null, null)
-            uri.toString()
+            val out = contentResolver.openOutputStream(uri) ?: run { contentResolver.delete(uri, null, null); return null }
+            PublishSink(
+                uri.toString(), out,
+                finish = {
+                    val v = android.content.ContentValues(); v.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                    contentResolver.update(uri, v, null, null)
+                    // the name MediaStore actually gave it (a collision becomes "name (1).ext")
+                    runCatching {
+                        contentResolver.query(uri, arrayOf(android.provider.MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                            if (c.moveToFirst()) c.getString(0) else null
+                        }
+                    }.getOrNull()
+                },
+                abort = { contentResolver.delete(uri, null, null) },
+            )
         } catch (e: Exception) {
-            android.util.Log.e("leadacid", "publishToMediaStore failed", e)
+            android.util.Log.e("leadacid", "openMediaStore failed", e)
             null
         }
     }

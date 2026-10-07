@@ -142,10 +142,11 @@ export const shell = (() => {
 
   // Hand a file (or text) to the system share sheet. The chooser is the user's
   // confirmation — it's not a silent send.
-  async function share(name, bytes, { mime = 'application/octet-stream', text } = {}) {
+  async function share(name, bytes, { mime = 'application/octet-stream', text, uri } = {}) {
     let q = `?name=${encodeURIComponent(name)}&mime=${encodeURIComponent(mime)}`;
     if (text) q += `&text=${encodeURIComponent(text)}`;
-    return (await native('share' + q, { method: 'POST', body: bytes })).ok;
+    if (uri) q += `&uri=${encodeURIComponent(uri)}`;          // a file already published — shared by reference, never re-sent
+    return (await native('share' + q, { method: 'POST', body: bytes || undefined })).ok;
   }
   async function shareText(text) {
     return (await native('share?mime=text/plain&text=' + encodeURIComponent(text), { method: 'POST' })).ok;
@@ -384,6 +385,89 @@ export const shell = (() => {
   };
 
 
+  // ── RemoteWritable: a real WritableStream over open / write… / close / abort routes ──
+  // Shared by the tree writer (a part file in a picked folder) and publishStream (a
+  // pending MediaStore row). `blob.stream().pipeTo(w)` works because it IS a
+  // WritableStream; the File System Access conveniences write()/close()/abort()
+  // work too (they take the stream's writer, so a later pipeTo sees it locked —
+  // as with FileSystemWritableFileStream). Bytes accumulate to ≥4 MiB requests; a
+  // Blob (or a ranged fileBlob) is streamed, never held whole. `.result` resolves
+  // to whatever close returned ({ uri, name, bytes } for a publish).
+  const WRITE_CHUNK = 4 * 1024 * 1024;
+  const wErr = (name, msg) => new DOMException(msg, name);
+  class RemoteWritable extends WritableStream {
+    constructor(ops) {
+      const box = {};
+      super({
+        write: (chunk) => box.self._sink(chunk),
+        close: () => box.self._finish(),
+        abort: () => box.self._drop(),
+      });
+      box.self = this;
+      this._ops = ops; this._id = null; this._writer = null; this._acc = []; this._n = 0; this._done = false;
+      this.result = new Promise((res, rej) => { this._res = res; this._rej = rej; });
+      this.result.catch(() => {});   // observed through close()/pipeTo() rejections; never an unhandled rejection by itself
+    }
+    async _open() { if (this._id == null) this._id = await this._ops.open(); return this._id; }
+    async _post(bytes) { const id = await this._open(); await this._ops.write(id, bytes); }
+    async _flush() { if (!this._n) return; const out = new Uint8Array(this._n); let at = 0; for (const p of this._acc) { out.set(p, at); at += p.byteLength; } this._acc = []; this._n = 0; await this._post(out); }
+    async _bytes(u8) { this._acc.push(u8); this._n += u8.byteLength; if (this._n >= WRITE_CHUNK) await this._flush(); }
+    async _sink(data) {
+      // WriteParams ({type:'write', data}) — a plain object; Blobs and our fileBlob have slice()
+      if (data && typeof data === 'object' && !ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && typeof data.slice !== 'function' && 'type' in data) {
+        if (data.type !== 'write') throw wErr('NotSupportedError', `${data.type} is not supported by this writer`);
+        data = data.data;
+      }
+      if (typeof data === 'string') return this._bytes(new TextEncoder().encode(data));
+      if (data instanceof ArrayBuffer) return this._bytes(new Uint8Array(data));
+      if (ArrayBuffer.isView(data)) return this._bytes(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+      if (data && typeof data.stream === 'function') {          // a Blob, or a ranged fileBlob — stream it
+        const rd = data.stream().getReader();
+        for (;;) { const { done, value } = await rd.read(); if (done) break; await this._bytes(value); }
+        return;
+      }
+      if (data && typeof data.arrayBuffer === 'function') return this._bytes(new Uint8Array(await data.arrayBuffer()));
+      throw wErr('TypeError', 'unsupported write data');
+    }
+    async _finish() {
+      if (this._done) return; this._done = true;
+      try { await this._flush(); const id = await this._open(); const r = await this._ops.close(id); this._res(r); return r; }
+      catch (e) { this._rej(e); throw e; }
+    }
+    async _drop() {
+      if (this._done) return; this._done = true; this._acc = []; this._n = 0;
+      if (this._id != null) await this._ops.abort(this._id).catch(() => {});
+      this._rej(wErr('AbortError', 'aborted'));
+    }
+    _wr() { return this._writer || (this._writer = this.getWriter()); }
+    write(data) { return this._wr().write(data); }
+    seek() { return Promise.reject(wErr('NotSupportedError', 'seek — this writer is sequential')); }
+    truncate() { return Promise.reject(wErr('NotSupportedError', 'truncate — this writer is sequential')); }
+    close() { return this._writer ? this._writer.close() : super.close(); }
+    abort(reason) { return this._writer ? this._writer.abort(reason) : super.abort(reason); }
+  }
+
+  // Streaming publish — a WritableStream into a public collection (Downloads /
+  // Pictures / Documents). The MediaStore row is PENDING while bytes stream in
+  // and appears in Files on close; abort drops it. `.result` → { uri, name,
+  // bytes } — share by `uri` (shell.share(name, null, { uri })), never by
+  // re-sending the bytes. A multi-GB export never sits in page memory.
+  async function fsCall(path, opts) {
+    const r = await native(path, opts);
+    if (r.ok) return r.json();
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || (path + ' → ' + r.status));
+  }
+  function publishStream(name, { collection = 'Downloads', mime = 'application/octet-stream' } = {}) {
+    const q = `?name=${encodeURIComponent(name)}&collection=${encodeURIComponent(collection)}&mime=${encodeURIComponent(mime)}`;
+    return new RemoteWritable({
+      open: async () => (await fsCall('fs/publish/open' + q, { method: 'POST' })).w,
+      write: (w, bytes) => fsCall('fs/publish/write?w=' + encodeURIComponent(w), { method: 'POST', body: bytes }),
+      close: (w) => fsCall('fs/publish/close?w=' + encodeURIComponent(w), { method: 'POST' }),
+      abort: (w) => fsCall('fs/publish/abort?w=' + encodeURIComponent(w), { method: 'POST' }),
+    });
+  }
+
   // ── tree: a folder the user picked, as File System Access-SHAPED handles ────
   // The `tree` plugin (ACTION_OPEN_DOCUMENT_TREE, grant persisted per folder)
   // serves a real folder on the phone; these classes give it the handle API an
@@ -396,7 +480,6 @@ export const shell = (() => {
   // (IndexedDB), and `tree.rehydrate(obj)` turns the clone back into a live handle
   // (re-validating the folder grant; a lost grant throws NotFoundError, honestly).
   // Writes land in a `.name.part` beside the target and swap in on close.
-  const TREE_CHUNK = 4 * 1024 * 1024;
   const tree = (() => {
     let probed = null;
     const err = (name, msg) => new DOMException(msg, name);
@@ -408,52 +491,13 @@ export const shell = (() => {
       const d = await r.json().catch(() => ({}));
       throw err(r.status === 404 ? 'NotFoundError' : r.status === 400 ? 'TypeMismatchError' : 'InvalidStateError', d.detail || (path + ' → ' + r.status));
     }
-    // A real WritableStream (like FileSystemWritableFileStream): `blob.stream().pipeTo(w)`
-    // works, and the FSAA conveniences write()/close()/abort() do too. Bytes go to the
-    // part file in ≥4 MiB requests; a Blob (or our ranged fileBlob) is streamed, never
-    // held whole.
-    class TreeWritable extends WritableStream {
-      constructor(t) {
-        const box = {};
-        super({
-          write: (chunk) => box.self._sink(chunk),
-          close: () => box.self._finish(),
-          abort: () => box.self._drop(),
-        });
-        box.self = this;
-        this._t = t; this._w = null; this._writer = null; this._acc = []; this._n = 0; this._done = false;
-      }
-      async _open() { if (!this._w) this._w = (await call('open', { dir: this._t.dir, path: this._t.path }, { method: 'POST' })).w; return this._w; }
-      async _post(bytes) { const w = await this._open(); await call('write', { w }, { method: 'POST', body: bytes }); }
-      async _flush() { if (!this._n) return; const out = new Uint8Array(this._n); let at = 0; for (const p of this._acc) { out.set(p, at); at += p.byteLength; } this._acc = []; this._n = 0; await this._post(out); }
-      async _bytes(u8) { this._acc.push(u8); this._n += u8.byteLength; if (this._n >= TREE_CHUNK) await this._flush(); }
-      async _sink(data) {
-        // WriteParams ({type:'write', data}) — a plain object; Blobs and our fileBlob have slice()
-        if (data && typeof data === 'object' && !ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && typeof data.slice !== 'function' && 'type' in data) {
-          if (data.type !== 'write') throw err('NotSupportedError', `${data.type} is not supported by the tree writer`);
-          data = data.data;
-        }
-        if (typeof data === 'string') return this._bytes(new TextEncoder().encode(data));
-        if (data instanceof ArrayBuffer) return this._bytes(new Uint8Array(data));
-        if (ArrayBuffer.isView(data)) return this._bytes(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-        if (data && typeof data.stream === 'function') {          // a Blob, or a ranged fileBlob — stream it
-          const rd = data.stream().getReader();
-          for (;;) { const { done, value } = await rd.read(); if (done) break; await this._bytes(value); }
-          return;
-        }
-        if (data && typeof data.arrayBuffer === 'function') return this._bytes(new Uint8Array(await data.arrayBuffer()));
-        throw err('TypeError', 'unsupported write data');
-      }
-      async _finish() { if (this._done) return; this._done = true; await this._flush(); const w = await this._open(); await call('close', { w }, { method: 'POST' }); }
-      async _drop() { if (this._done) return; this._done = true; this._acc = []; this._n = 0; if (this._w) await call('abort', { w: this._w }, { method: 'POST' }).catch(() => {}); }
-      // the FSAA conveniences — they take the stream's writer, so a later pipeTo() sees it locked (as with FSAA)
-      _wr() { return this._writer || (this._writer = this.getWriter()); }
-      write(data) { return this._wr().write(data); }
-      seek() { return Promise.reject(err('NotSupportedError', 'seek — the tree writer is sequential')); }
-      truncate() { return Promise.reject(err('NotSupportedError', 'truncate — the tree writer is sequential')); }
-      close() { return this._writer ? this._writer.close() : super.close(); }
-      abort(reason) { return this._writer ? this._writer.abort(reason) : super.abort(reason); }
-    }
+    // the tree writer: RemoteWritable over the tree routes (part file → renamed on close)
+    const treeWritable = (t) => new RemoteWritable({
+      open: async () => (await call('open', { dir: t.dir, path: t.path }, { method: 'POST' })).w,
+      write: (w, bytes) => call('write', { w }, { method: 'POST', body: bytes }),
+      close: (w) => call('close', { w }, { method: 'POST' }),
+      abort: (w) => call('abort', { w }, { method: 'POST' }),
+    });
     class TreeFileHandle {
       constructor(dir, path, name, uri) { this.kind = 'file'; this.name = name; this.__leadacidTree = { dir, path, uri, kind: 'file' }; }
       async queryPermission() { return 'granted'; }
@@ -465,7 +509,7 @@ export const shell = (() => {
         const b = fileBlob(i.token, i.size, this.name); b.lastModified = i.mtime || 0;
         return b;
       }
-      async createWritable() { return new TreeWritable(this.__leadacidTree); }
+      async createWritable() { return treeWritable(this.__leadacidTree); }
     }
     class TreeDirHandle {
       constructor(dir, path, name, uri) { this.kind = 'directory'; this.name = name; this.__leadacidTree = { dir, path, uri, kind: 'directory' }; }
@@ -479,7 +523,7 @@ export const shell = (() => {
         let s = await this._stat(p);
         if (!s) {
           if (!create) throw err('NotFoundError', name);
-          const w = new TreeWritable({ dir: t.dir, path: p }); await w.close();   // an empty file, like FSAA's create
+          await treeWritable({ dir: t.dir, path: p }).close();   // an empty file, like FSAA's create
           s = { kind: 'file' };
         }
         if (s.kind !== 'file') throw err('TypeMismatchError', name + ' is a directory');
@@ -534,7 +578,7 @@ export const shell = (() => {
     };
   })();
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera, tree };
+  return { present, native, stream, version, keepAwake, publish, publishStream, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera, tree };
 })();
 
 /**

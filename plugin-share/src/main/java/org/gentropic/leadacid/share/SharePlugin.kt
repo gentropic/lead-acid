@@ -21,8 +21,8 @@ import java.io.File
  * lambda so the plugin stays context-free; [Share] binds it to the host.
  */
 class SharePlugin(
-    /** name, mime, text?, bytes? → launched the chooser? */
-    private val share: (String, String, String?, ByteArray?) -> Boolean,
+    /** name, mime, text?, bytes?, uri? → launched the chooser? (`uri` = an already-published content:// file) */
+    private val share: (String, String, String?, ByteArray?, String?) -> Boolean,
 ) : Plugin {
     override val name = "share"
 
@@ -32,9 +32,10 @@ class SharePlugin(
         val name = req.query["name"] ?: "shared"
         val mime = req.query["mime"] ?: "application/octet-stream"
         val text = req.query["text"]
-        if (req.body == null && text == null)
-            return BridgeResponse.error(400, "Bad Request", "nothing to share (no body, no text)")
-        return if (share(name, mime, text, req.body)) BridgeResponse.json(200, "OK", """{"ok":true}""")
+        val uri = req.query["uri"]
+        if (req.body == null && text == null && uri == null)
+            return BridgeResponse.error(400, "Bad Request", "nothing to share (no body, no text, no uri)")
+        return if (share(name, mime, text, req.body, uri)) BridgeResponse.json(200, "OK", """{"ok":true}""")
         else BridgeResponse.error(500, "Share Failed", "could not launch the share sheet")
     }
 }
@@ -46,13 +47,18 @@ class SharePlugin(
  */
 val Share = PluginFactory { host -> SharePlugin(shareOut(host)) }
 
-private fun shareOut(host: PluginHost): (String, String, String?, ByteArray?) -> Boolean =
-    { name, mime, text, bytes ->
+private fun shareOut(host: PluginHost): (String, String, String?, ByteArray?, String?) -> Boolean =
+    { name, mime, text, bytes, uriStr ->
         val ctx = host.context
         try {
             val send = Intent(Intent.ACTION_SEND)
             if (text != null) send.putExtra(Intent.EXTRA_TEXT, text)
-            if (bytes != null) {
+            if (uriStr != null) {
+                // a file this app already published (MediaStore) — share the row, don't copy it
+                send.type = mime
+                send.putExtra(Intent.EXTRA_STREAM, android.net.Uri.parse(uriStr))
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } else if (bytes != null) {
                 val dir = File(ctx.cacheDir, "share").apply { mkdirs() }
                 val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "shared" }
                 val f = File(dir, safe).apply { writeBytes(bytes) }

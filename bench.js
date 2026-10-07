@@ -80,7 +80,7 @@
   var published = [], shared = [];                      // what the page handed out (the smokes read these)
   // tree: fx.tree = { name, children: { <name>: {kind:'directory',children} | {kind:'file',bytes,mtime} } }
   var treeRoot = fx.tree || { name: 'bench-folder', children: {} }; treeRoot.kind = 'directory'; treeRoot.children = treeRoot.children || {};
-  var treeWriters = {}, tSeq = 0;
+  var treeWriters = {}, tSeq = 0, pubWriters = {}, pubSeq = 0;
   function treeUri() { return 'bench://tree/' + treeRoot.name; }
   function treeRootJson() { return { dir: 'dbench', name: treeRoot.name, uri: treeUri() }; }
   function tNotFound(p) { return jsonResp({ error: 'Not Found', detail: 'no such entry: ' + p }, 404); }
@@ -116,9 +116,23 @@
     },
     'fs/publish': function (req, body) {
       console.log('[bench] fs/publish', req.query.name, (body ? body.length : 0) + 'B →', req.query.collection);
-      published.push({ name: req.query.name, collection: req.query.collection, mime: req.query.mime, bytes: body ? body.slice() : new Uint8Array(0) });
+      published.push({ name: req.query.name, collection: req.query.collection, mime: req.query.mime, bytes: body ? body.slice() : new Uint8Array(0), chunks: 1, uri: 'bench://' + req.query.collection + '/' + req.query.name });
       return jsonResp({ uri: 'bench://' + req.query.collection + '/' + req.query.name, name: req.query.name, bytes: body ? body.length : 0 });
     },
+    // streaming publish: the row is pending until close; the ledger records the chunking
+    'fs/publish/open': function (req) {
+      var id = 'p' + (++pubSeq); pubWriters[id] = { name: req.query.name, collection: req.query.collection, mime: req.query.mime, parts: [], n: 0, uri: 'bench://' + req.query.collection + '/' + req.query.name };
+      return jsonResp({ w: id, uri: pubWriters[id].uri });
+    },
+    'fs/publish/write': function (req, body) { var w = pubWriters[req.query.w]; if (!w) return jsonResp({ error: 'Not Found', detail: 'no such writer' }, 404); if (body && body.length) { w.parts.push(body.slice()); w.n += body.length; } return jsonResp({ bytes: w.n }); },
+    'fs/publish/close': function (req) {
+      var w = pubWriters[req.query.w]; if (!w) return jsonResp({ error: 'Not Found', detail: 'no such writer' }, 404); delete pubWriters[req.query.w];
+      var out = new Uint8Array(w.n), at = 0; w.parts.forEach(function (p) { out.set(p, at); at += p.length; });
+      published.push({ name: w.name, collection: w.collection, mime: w.mime, bytes: out, chunks: w.parts.length, uri: w.uri });
+      console.log('[bench] fs/publish (stream)', w.name, w.n + 'B in ' + w.parts.length + ' chunk(s) →', w.collection);
+      return jsonResp({ uri: w.uri, name: w.name, bytes: w.n });
+    },
+    'fs/publish/abort': function (req) { delete pubWriters[req.query.w]; return jsonResp({ ok: true }); },
     // ── tree: an in-memory folder the mocked picker hands out (fx.tree) ──
     'tree/info': function () { return jsonResp({ ok: true }); },
     'tree/pick': function () { return fx.treePick === false ? jsonResp({ cancelled: true }) : jsonResp(treeRootJson()); },
@@ -225,7 +239,7 @@
     },
     'share': function (req, body) {
       console.log('[bench] share', req.query.name || '(text)', body ? body.length + 'B' : req.query.text);
-      shared.push({ name: req.query.name, mime: req.query.mime, text: req.query.text, bytes: body ? body.slice() : null });
+      shared.push({ name: req.query.name, mime: req.query.mime, text: req.query.text, uri: req.query.uri || null, bytes: body ? body.slice() : null });
       return jsonResp({ ok: true });
     },
     'attest/keyinfo': function () {
@@ -280,7 +294,7 @@
     return bodyP.then(function (body) {
       // dynamic fs read: fs/<token> (but not fs/list, fs/publish, fs/echo)
       var seg = pathAndSub.split('/');
-      if (seg[0] === 'fs' && seg[1] && !routes['fs/' + seg[1]] && seg[1] !== 'echo') {
+      if (seg[0] === 'fs' && seg[1] && !routes['fs/' + seg[1]] && !routes[pathAndSub] && seg[1] !== 'echo') {
         return fsRead(decodeURIComponent(seg[1]), headers['Range'] || headers['range']);
       }
       var h = routes[pathAndSub];

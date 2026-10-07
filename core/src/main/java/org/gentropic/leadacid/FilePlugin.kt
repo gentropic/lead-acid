@@ -23,10 +23,17 @@ import java.nio.channels.FileChannel
  * segments map, and each map is < 2 GiB. SAF documents keep their fd open for the
  * source's lifetime; `releaseSaf` closes them (page-generation lifecycle).
  */
+/**
+ * A streaming publish target (fs/publish, fs/publish/open): bytes go to `out`,
+ * `finish` makes the row visible (IS_PENDING → 0) and returns the ACTUAL display
+ * name (MediaStore de-duplicates a collision as "name (1).ext"), `abort` drops it.
+ */
+class PublishSink(val uri: String, val out: java.io.OutputStream, val finish: () -> String?, val abort: () -> Unit)
+
 class FilePlugin(
     files: Map<String, java.io.File>,
-    /** name, collection, mime, bytes → the resulting content:// URI, or null. */
-    private val publisher: ((String, String, String, ByteArray) -> String?)? = null,
+    /** name, collection, mime → an open streaming target in a public collection, or null. */
+    private val opener: ((String, String, String) -> PublishSink?)? = null,
 ) : Plugin {
     override val name = "fs"
 
@@ -150,6 +157,7 @@ class FilePlugin(
         if (req.subpath == "echo") return echo(req)
         if (req.subpath == "list") return list()
         if (req.subpath == "publish") return publish(req)
+        if (req.subpath.startsWith("publish/")) return publishStream(req)
 
         val src = synchronized(this) { sources[req.subpath] }
             ?: return BridgeResponse.error(404, "Not Found", "unknown token: ${req.subpath}")
@@ -225,17 +233,66 @@ class FilePlugin(
             return BridgeResponse.error(405, "Method Not Allowed", req.method)
         val bytes = req.body
             ?: return BridgeResponse.error(400, "Bad Request", "no body (port sidecar delivered nothing)")
-        val pub = publisher
+        val open = opener
             ?: return BridgeResponse.error(503, "Not Available", "no publisher on this host")
         val name = req.query["name"] ?: "leadacid-output"
         val collection = req.query["collection"] ?: "Downloads"
         val mime = req.query["mime"] ?: "application/octet-stream"
-        val uri = pub(name, collection, mime, bytes)
+        val sink = open(name, collection, mime)
             ?: return BridgeResponse.error(500, "Publish Failed", "MediaStore insert returned null")
+        val actual = try { sink.out.use { it.write(bytes) }; sink.finish() ?: name } catch (e: Exception) {
+            runCatching { sink.abort() }
+            return BridgeResponse.error(500, "Publish Failed", e.toString())
+        }
         return BridgeResponse.json(
             200, "OK",
-            """{"uri":${BridgeResponse.jsonStr(uri)},"name":${BridgeResponse.jsonStr(name)},"bytes":${bytes.size}}""",
+            """{"uri":${BridgeResponse.jsonStr(sink.uri)},"name":${BridgeResponse.jsonStr(actual)},"bytes":${bytes.size}}""",
         )
+    }
+
+    // ── streaming publish: open → write… → close (the row is PENDING until close) ──
+    // A multi-GB export never sits in page memory: the artifact pipes a stream in
+    // ≥4 MiB requests; abort drops the pending row so nothing half-written shows.
+    private class PubWriter(val sink: PublishSink, val name: String) { var bytes = 0L }
+    private val pubWriters = java.util.concurrent.ConcurrentHashMap<String, PubWriter>()
+    private val pubSeq = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun publishStream(req: BridgeRequest): BridgeResponse {
+        if (req.method != "POST") return BridgeResponse.error(405, "Method Not Allowed", req.method)
+        val op = req.subpath.removePrefix("publish/")
+        if (op == "open") {
+            val open = opener ?: return BridgeResponse.error(503, "Not Available", "no publisher on this host")
+            val name = req.query["name"] ?: "leadacid-output"
+            val sink = open(name, req.query["collection"] ?: "Downloads", req.query["mime"] ?: "application/octet-stream")
+                ?: return BridgeResponse.error(500, "Publish Failed", "MediaStore insert returned null")
+            val id = "p" + pubSeq.incrementAndGet()
+            pubWriters[id] = PubWriter(sink, name)
+            return BridgeResponse.json(200, "OK", """{"w":${BridgeResponse.jsonStr(id)},"uri":${BridgeResponse.jsonStr(sink.uri)}}""")
+        }
+        val id = req.query["w"] ?: return BridgeResponse.error(400, "Bad Request", "w required")
+        val w = pubWriters[id] ?: return BridgeResponse.error(404, "Not Found", "no such writer (closed?)")
+        return when (op) {
+            "write" -> {
+                val b = req.body ?: ByteArray(0)
+                synchronized(w) { w.sink.out.write(b); w.bytes += b.size }
+                BridgeResponse.json(200, "OK", """{"bytes":${w.bytes}}""")
+            }
+            "close" -> {
+                pubWriters.remove(id)
+                val actual = try { synchronized(w) { w.sink.out.flush(); w.sink.out.close() }; w.sink.finish() ?: w.name } catch (e: Exception) {
+                    runCatching { w.sink.abort() }
+                    return BridgeResponse.error(500, "Publish Failed", e.toString())
+                }
+                BridgeResponse.json(200, "OK", """{"uri":${BridgeResponse.jsonStr(w.sink.uri)},"name":${BridgeResponse.jsonStr(actual)},"bytes":${w.bytes}}""")
+            }
+            "abort" -> {
+                pubWriters.remove(id)
+                runCatching { synchronized(w) { w.sink.out.close() } }
+                runCatching { w.sink.abort() }
+                BridgeResponse.json(200, "OK", """{"ok":true}""")
+            }
+            else -> BridgeResponse.error(404, "Not Found", "fs/publish/$op")
+        }
     }
 
     @Synchronized
