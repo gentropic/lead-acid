@@ -252,7 +252,37 @@ export const shell = (() => {
     return s;
   }
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector, intake };
+  // Raw GNSS off the platform LocationManager (SPEC §5.1 gnss). Each opens a
+  // push stream; the first open asks for FINE location (the system dialog) and
+  // rejects with {error:'permission', canRequest} if the user says no — or
+  // canRequest:false when this instrument doesn't carry the gnss plugin.
+  const gnss = {
+    /** fixes: s.on('fix', {lat,lon,alt,acc,speed,bearing,t,provider,last}) */
+    location: ({ minMs = 1000, provider } = {}) =>
+      gnssOpen(`gnss/location?minMs=${minMs}${provider ? '&provider=' + encodeURIComponent(provider) : ''}`),
+    /** s.on('status', {fixSats, satellites:[…]}) + 'firstfix' / 'engine' */
+    status: () => gnssOpen('gnss/status'),
+    /** s.on('raw', {clock, measurements}) — the PPK/PPP inputs, faithfully */
+    raw: () => gnssOpen('gnss/raw'),
+    /** s.on('nmea', {t, s}) */
+    nmea: () => gnssOpen('gnss/nmea'),
+    /** {granted, canRequest}; request:true shows the dialog if needed */
+    async permission({ request = false } = {}) { return (await native('gnss/permission' + (request ? '?request=1' : ''))).json(); },
+  };
+  async function gnssOpen(path) {
+    try { return await stream(path); }
+    catch (e) {
+      // a 403 carries {error:'permission', canRequest} — surface it as such
+      const m = /stream open failed: (\d+)/.exec(String(e && e.message));
+      if (m && m[1] === '403') {
+        let info = null; try { info = await (await native(path.split('?')[0].replace(/\/[a-z]+$/, '/permission'))).json(); } catch { /* ignore */ }
+        const err = new Error('location permission denied'); err.permission = info; throw err;
+      }
+      throw e;
+    }
+  }
+
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector, intake, gnss };
 })();
 
 /**

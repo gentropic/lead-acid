@@ -1,7 +1,13 @@
 # GNSS plugin — `gnss`
 
-**Design spec for raw GNSS (SPEC §5.1, committed).** Not built; specced while the design is fresh
-because raw GNSS is genuinely fiddly. *Drivers: the raw-GNSS logger instrument; wuffle v3 (station
+**Design spec for raw GNSS (SPEC §5.1, committed).** Specced while the design was fresh because
+raw GNSS is genuinely fiddly. **BUILT 2026-10-07 (`plugin-gnss`): the four push streams —
+`location` / `status` / `raw` / `nmea` — plus `permission`, exactly as sketched below; the
+stream-open blocks the interceptor thread on the host's permission request (the system dialog
+answers it; a refusal → 403 `{canRequest}`); handler-based `LocationManager` callbacks on a
+HandlerThread (the executor overloads need API 30/31, minSdk is 29). Verified on the S24+: a real
+GPS fix reaches wuffle v3, which stamps each measurement with lat/lon/accuracy. NOT yet built:
+the foreground-service logger (`log/start` / `log/stop`) and the WMM declination module.** *Drivers: the raw-GNSS logger instrument; wuffle v3 (station
 coordinates + the path to declination).*
 
 Ordinary web geolocation (`navigator.geolocation`) already works in the shell (the §7c

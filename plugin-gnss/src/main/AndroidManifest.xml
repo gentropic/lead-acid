@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  gnss plugin: the permission rides HERE, in the plugin's manifest — raw GNSS
+  measurements require FINE, and API 31+ requires COARSE to be declared
+  alongside. An instrument that depends on :plugin-gnss gets both through the
+  merge; one that doesn't has neither (SPEC §5 — build-enforced capability).
+  No background location: the logger (later) is a foreground service.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+</manifest>

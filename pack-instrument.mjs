@@ -2,7 +2,7 @@
 // pack-instrument — the five-minute recipe as one command (PLAN M2 Phase 3).
 //
 //   node pack-instrument.mjs <module> --id <applicationId> --label "<name>"
-//                            [--artifact <built.html>] [--plugins sensor,share,attest,intake]
+//                            [--artifact <built.html>] [--plugins sensor,share,attest,intake,gnss]
 //                            [--intake text/csv,text/plain]   (mime types the instrument takes in)
 //
 // Stamps a new instrument module out of template/: namespace + applicationId,
@@ -26,6 +26,7 @@ const PLUGINS = {
   share: { module: ':plugin-share', imp: 'org.gentropic.leadacid.share.Share', factory: 'Share' },
   attest: { module: ':plugin-attest', imp: 'org.gentropic.leadacid.attest.Attest', factory: 'Attest' },
   intake: { module: ':plugin-intake', imp: 'org.gentropic.leadacid.intake.Intake', factory: 'Intake' },
+  gnss: { module: ':plugin-gnss', imp: 'org.gentropic.leadacid.gnss.Gnss', factory: 'Gnss' },
 };
 
 // ── args ─────────────────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ for (let i = 0; i < args.length; i++) {
 }
 const name = positional[0];
 const usage = () => {
-  console.error('usage: node pack-instrument.mjs <module> --id <applicationId> --label "<name>" [--artifact <built.html>] [--plugins sensor,share,attest,intake] [--intake <mime,mime>]');
+  console.error('usage: node pack-instrument.mjs <module> --id <applicationId> --label "<name>" [--artifact <built.html>] [--plugins sensor,share,attest,intake,gnss] [--intake <mime,mime>]');
   process.exit(2);
 };
 if (!name || !flags.id || !flags.label) usage();

@@ -91,7 +91,9 @@ didn't include** — structural, per §5.
 merge witness — a `template` *without* `plugin-share` has no `…fileprovider` in its merged
 manifest; *with* it, the provider is present. That proves per-module manifest contributions merge.
 The permission version of the proof lands with the first perm-bearing plugin (`gnss`→LOCATION,
-`camera`→CAMERA).
+`camera`→CAMERA). **Landed 2026-10-07 with `plugin-gnss`:** merged manifests show
+`ACCESS_FINE_LOCATION` + `COARSE` in `app` and `wuffle` (both depend on it) and neither in
+`template` (which doesn't). Build-enforced capability, proven both ways.
 
 ## Migration map (what moves, mechanically)
 

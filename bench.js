@@ -18,6 +18,8 @@
     version: 'bench',
     sensorRateHz: 30,
     files: {},               // token → Uint8Array (fs fixtures)
+    fix: { lat: -23.52, lon: -46.19, alt: 760, acc: 5.0 },   // gnss/location fixture
+    locationGranted: true,   // flip to false to exercise the 403 path
   }, window.__benchFixtures || {});
 
   // ── feature detection: the artifact now thinks it's in the shell ──────────
@@ -99,6 +101,26 @@
       return jsonResp({ stream: id });
     },
     'intake/pending': function () { return jsonResp(intakeQueue.splice(0)); },
+    'gnss/permission': function () { return jsonResp({ granted: fx.locationGranted, canRequest: true }); },
+    'gnss/location': function (req) {
+      if (!fx.locationGranted) return new Response(JSON.stringify({ error: 'permission', detail: 'denied', canRequest: true }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      var id = 'bg' + (++streamSeq), minMs = +(req.query.minMs || 1000);
+      var iv = setInterval(function () {
+        push(id, 'fix', JSON.stringify({ lat: fx.fix.lat + (Math.random() - 0.5) * 1e-5, lon: fx.fix.lon + (Math.random() - 0.5) * 1e-5, alt: fx.fix.alt, acc: fx.fix.acc, speed: 0, bearing: null, t: Date.now(), provider: 'bench', last: false }));
+      }, Math.max(100, minMs));
+      streams.set(id, { stop: function () { clearInterval(iv); } });
+      setTimeout(function () { push(id, 'fix', JSON.stringify(Object.assign({ speed: 0, bearing: null, t: Date.now(), provider: 'bench', last: true }, fx.fix))); }, 0);
+      return jsonResp({ stream: id });
+    },
+    'gnss/status': function () {
+      if (!fx.locationGranted) return new Response(JSON.stringify({ error: 'permission', detail: 'denied', canRequest: true }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      var id = 'bg' + (++streamSeq);
+      var iv = setInterval(function () {
+        push(id, 'status', JSON.stringify({ fixSats: 7, satellites: [1, 3, 8, 14, 22, 27, 31].map(function (sv) { return { svid: sv, constellation: 'gps', cn0: 30 + (sv % 7), used: true, elev: 20 + sv, az: sv * 11 }; }) }));
+      }, 1000);
+      streams.set(id, { stop: function () { clearInterval(iv); } });
+      return jsonResp({ stream: id });
+    },
     'sensor/list': function () { return jsonResp([{ name: 'rotation', vendor: 'bench', resolution: 0 }]); },
     'sensor/stream': function (req) {
       var id = 'bs' + (++streamSeq);
@@ -186,6 +208,6 @@
     if (!intakeStream) return;
     intakeQueue.splice(0).forEach(function (it) { push(intakeStream, 'item', JSON.stringify(it)); });
   }
-  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake.');
+  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss.');
   window.__bench = { fixtures: fx, push: push, files: fx.files, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
 })();
