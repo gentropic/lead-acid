@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- tree plugin: contributes nothing to the merged manifest. Folder access is a
+     per-folder SAF grant the user gives in the system picker, not a permission. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

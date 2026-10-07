@@ -77,6 +77,31 @@
 
   // ── mock handlers. (req = {query, headers}, body = Uint8Array|null) ────────
   var streams = new Map(); var streamSeq = 0;
+  var published = [], shared = [];                      // what the page handed out (the smokes read these)
+  // tree: fx.tree = { name, children: { <name>: {kind:'directory',children} | {kind:'file',bytes,mtime} } }
+  var treeRoot = fx.tree || { name: 'bench-folder', children: {} }; treeRoot.kind = 'directory'; treeRoot.children = treeRoot.children || {};
+  var treeWriters = {}, tSeq = 0;
+  function treeUri() { return 'bench://tree/' + treeRoot.name; }
+  function treeRootJson() { return { dir: 'dbench', name: treeRoot.name, uri: treeUri() }; }
+  function tNotFound(p) { return jsonResp({ error: 'Not Found', detail: 'no such entry: ' + p }, 404); }
+  function tEntry(name, n) { return { name: name, kind: n.kind, size: n.kind === 'file' ? n.bytes.length : 0, mtime: n.mtime || 0 }; }
+  function tResolve(path) {
+    var segs = path.split('/').filter(Boolean); var node = treeRoot, parent = null, name = '';
+    for (var i = 0; i < segs.length; i++) {
+      if (node.kind !== 'directory') return { parent: null, node: null, name: segs[i] };
+      parent = node; name = segs[i]; node = node.children[name] || null;
+      if (!node) return { parent: i === segs.length - 1 ? parent : null, node: null, name: name };
+    }
+    return { parent: parent, node: node, name: name };
+  }
+  function tEnsureDir(path) {
+    var node = treeRoot;
+    path.split('/').filter(Boolean).forEach(function (s) {
+      if (!node.children[s]) node.children[s] = { kind: 'directory', children: {} };
+      node = node.children[s]; if (node.kind !== 'directory') throw new Error('a file is in the way: ' + s);
+    });
+    return node;
+  }
   var routes = {
     'shell/info': function () { return jsonResp({ present: true, version: fx.version }); },
     'shell/keepawake': function () { return jsonResp({ ok: true }); },
@@ -91,8 +116,48 @@
     },
     'fs/publish': function (req, body) {
       console.log('[bench] fs/publish', req.query.name, (body ? body.length : 0) + 'B →', req.query.collection);
+      published.push({ name: req.query.name, collection: req.query.collection, mime: req.query.mime, bytes: body ? body.slice() : new Uint8Array(0) });
       return jsonResp({ uri: 'bench://' + req.query.collection + '/' + req.query.name, name: req.query.name, bytes: body ? body.length : 0 });
     },
+    // ── tree: an in-memory folder the mocked picker hands out (fx.tree) ──
+    'tree/info': function () { return jsonResp({ ok: true }); },
+    'tree/pick': function () { return fx.treePick === false ? jsonResp({ cancelled: true }) : jsonResp(treeRootJson()); },
+    'tree/restore': function (req) { return req.query.uri === treeUri() ? jsonResp(treeRootJson()) : jsonResp({ error: 'Not Found', detail: 'permission lost — pick the folder again' }, 404); },
+    'tree/list': function (req) {
+      var r = tResolve(req.query.path || ''); if (!r.node) return tNotFound(req.query.path);
+      if (r.node.kind !== 'directory') return jsonResp({ error: 'Bad Request', detail: 'not a directory' }, 400);
+      return jsonResp(Object.keys(r.node.children).map(function (k) { return tEntry(k, r.node.children[k]); }));
+    },
+    'tree/stat': function (req) { var r = tResolve(req.query.path || ''); return r.node ? jsonResp(tEntry(r.name || treeRoot.name, r.node)) : tNotFound(req.query.path); },
+    'tree/mkdir': function (req) { tEnsureDir(req.query.path || ''); return jsonResp({ ok: true }); },
+    'tree/remove': function (req) {
+      var r = tResolve(req.query.path || ''); if (!r.node || !r.parent) return tNotFound(req.query.path);
+      if (r.node.kind === 'directory' && req.query.recursive !== '1' && Object.keys(r.node.children).length) return jsonResp({ error: 'Bad Request', detail: 'directory not empty' }, 400);
+      delete r.parent.children[r.name]; return jsonResp({ ok: true });
+    },
+    'tree/rename': function (req) {
+      var r = tResolve(req.query.path || ''); if (!r.node || !r.parent) return tNotFound(req.query.path);
+      r.parent.children[req.query.name] = r.node; delete r.parent.children[r.name]; return jsonResp({ ok: true });
+    },
+    'tree/token': function (req) {
+      var r = tResolve(req.query.path || ''); if (!r.node) return tNotFound(req.query.path);
+      if (r.node.kind !== 'file') return jsonResp({ error: 'Bad Request', detail: 'not a file' }, 400);
+      var token = 'tree:' + req.query.path; fx.files[token] = r.node.bytes;
+      return jsonResp({ token: token, size: r.node.bytes.length, mtime: r.node.mtime || 0, name: r.name });
+    },
+    'tree/open': function (req) {
+      var segs = (req.query.path || '').split('/').filter(Boolean); if (!segs.length) return jsonResp({ error: 'Bad Request', detail: 'path names no file' }, 400);
+      var dir = tEnsureDir(segs.slice(0, -1).join('/'));
+      var id = 'w' + (++tSeq); treeWriters[id] = { dir: dir, name: segs[segs.length - 1], parts: [], n: 0 };
+      return jsonResp({ w: id });
+    },
+    'tree/write': function (req, body) { var w = treeWriters[req.query.w]; if (!w) return jsonResp({ error: 'Not Found', detail: 'no such writer' }, 404); if (body && body.length) { w.parts.push(body.slice()); w.n += body.length; } return jsonResp({ bytes: w.n }); },
+    'tree/close': function (req) {
+      var w = treeWriters[req.query.w]; if (!w) return jsonResp({ error: 'Not Found', detail: 'no such writer' }, 404); delete treeWriters[req.query.w];
+      var out = new Uint8Array(w.n), at = 0; w.parts.forEach(function (p) { out.set(p, at); at += p.length; });
+      w.dir.children[w.name] = { kind: 'file', bytes: out, mtime: Date.now() }; return jsonResp({ ok: true, size: w.n });
+    },
+    'tree/abort': function (req) { delete treeWriters[req.query.w]; return jsonResp({ ok: true }); },
     'intake/stream': function () {
       var id = 'bi' + (++streamSeq);
       streams.set(id, { stop: function () { if (intakeStream === id) intakeStream = null; } });
@@ -160,6 +225,7 @@
     },
     'share': function (req, body) {
       console.log('[bench] share', req.query.name || '(text)', body ? body.length + 'B' : req.query.text);
+      shared.push({ name: req.query.name, mime: req.query.mime, text: req.query.text, bytes: body ? body.slice() : null });
       return jsonResp({ ok: true });
     },
     'attest/keyinfo': function () {
@@ -236,7 +302,7 @@
     if (!intakeStream) return;
     intakeQueue.splice(0).forEach(function (it) { push(intakeStream, 'item', JSON.stringify(it)); });
   }
-  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera.');
+  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera, tree.');
   // pause(): what the real shell's onPause does — stop + close EVERY open push
   // stream and tell the page (a share reaching a running singleTask instrument
   // pauses it first; the intake stream must come back by itself, SPEC §4.5).
@@ -244,5 +310,5 @@
     streams.forEach(function (s, id) { s.stop(); pushClose(id); });
     streams.clear();
   }
-  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
+  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, published: published, shared: shared, tree: treeRoot, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
 })();

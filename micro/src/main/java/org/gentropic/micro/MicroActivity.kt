@@ -3,6 +3,10 @@ package org.gentropic.micro
 import org.gentropic.leadacid.LeadAcidActivity
 import org.gentropic.leadacid.PluginFactory
 import org.gentropic.leadacid.intake.Intake
+import org.gentropic.leadacid.share.Share
+import org.gentropic.leadacid.tree.Tree
+import org.gentropic.leadacid.share.Share
+import org.gentropic.leadacid.tree.Tree
 
 /**
  * micro as an instrument. POSTURE A: micro's own file says `connect-src 'none'`
@@ -10,8 +14,12 @@ import org.gentropic.leadacid.intake.Intake
  * time so the page can reach /native — the only origin here — while the OS
  * (no INTERNET permission) keeps "nothing leaves the device" true. Intake is
  * the "Open with micro" door; files arrive as fs tokens and read off mmap.
+ * Share is the way OUT (an export is published to Downloads and offered to the
+ * share sheet — a blob: download goes nowhere in a WebView). Tree is the
+ * project folder: Android's folder picker, served as a directory tree, because
+ * the WebView defines showDirectoryPicker but aborts it on sight.
  */
 class MicroActivity : LeadAcidActivity() {
     override val shellConnect: Boolean = true
-    override val plugins: List<PluginFactory> = listOf(Intake)
+    override val plugins: List<PluginFactory> = listOf(Intake, Share, Tree)
 }

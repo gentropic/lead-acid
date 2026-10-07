@@ -383,7 +383,158 @@ export const shell = (() => {
     },
   };
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera };
+
+  // ── tree: a folder the user picked, as File System Access-SHAPED handles ────
+  // The `tree` plugin (ACTION_OPEN_DOCUMENT_TREE, grant persisted per folder)
+  // serves a real folder on the phone; these classes give it the handle API an
+  // artifact already speaks — getFileHandle / getDirectoryHandle / removeEntry /
+  // entries / resolve / getFile / createWritable — so project-folder code runs
+  // unchanged. Why not the WebView's own showDirectoryPicker: it is DEFINED there
+  // and aborts instantly (no chooser), the worst kind of present.
+  //
+  // Handles persist: their own `__leadacidTree` field survives a structured clone
+  // (IndexedDB), and `tree.rehydrate(obj)` turns the clone back into a live handle
+  // (re-validating the folder grant; a lost grant throws NotFoundError, honestly).
+  // Writes land in a `.name.part` beside the target and swap in on close.
+  const TREE_CHUNK = 4 * 1024 * 1024;
+  const tree = (() => {
+    let probed = null;
+    const err = (name, msg) => new DOMException(msg, name);
+    const q = (o) => Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+    const concat = (parts, n) => { const out = new Uint8Array(n); let at = 0; for (const p of parts) { out.set(p, at); at += p.byteLength; } return out; };
+    async function call(path, params, opts) {
+      const r = await native('tree/' + path + (params ? '?' + q(params) : ''), opts);
+      if (r.ok) return r.json();
+      const d = await r.json().catch(() => ({}));
+      throw err(r.status === 404 ? 'NotFoundError' : r.status === 400 ? 'TypeMismatchError' : 'InvalidStateError', d.detail || (path + ' → ' + r.status));
+    }
+    // A real WritableStream (like FileSystemWritableFileStream): `blob.stream().pipeTo(w)`
+    // works, and the FSAA conveniences write()/close()/abort() do too. Bytes go to the
+    // part file in ≥4 MiB requests; a Blob (or our ranged fileBlob) is streamed, never
+    // held whole.
+    class TreeWritable extends WritableStream {
+      constructor(t) {
+        const box = {};
+        super({
+          write: (chunk) => box.self._sink(chunk),
+          close: () => box.self._finish(),
+          abort: () => box.self._drop(),
+        });
+        box.self = this;
+        this._t = t; this._w = null; this._writer = null; this._acc = []; this._n = 0; this._done = false;
+      }
+      async _open() { if (!this._w) this._w = (await call('open', { dir: this._t.dir, path: this._t.path }, { method: 'POST' })).w; return this._w; }
+      async _post(bytes) { const w = await this._open(); await call('write', { w }, { method: 'POST', body: bytes }); }
+      async _flush() { if (!this._n) return; const out = new Uint8Array(this._n); let at = 0; for (const p of this._acc) { out.set(p, at); at += p.byteLength; } this._acc = []; this._n = 0; await this._post(out); }
+      async _bytes(u8) { this._acc.push(u8); this._n += u8.byteLength; if (this._n >= TREE_CHUNK) await this._flush(); }
+      async _sink(data) {
+        // WriteParams ({type:'write', data}) — a plain object; Blobs and our fileBlob have slice()
+        if (data && typeof data === 'object' && !ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && typeof data.slice !== 'function' && 'type' in data) {
+          if (data.type !== 'write') throw err('NotSupportedError', `${data.type} is not supported by the tree writer`);
+          data = data.data;
+        }
+        if (typeof data === 'string') return this._bytes(new TextEncoder().encode(data));
+        if (data instanceof ArrayBuffer) return this._bytes(new Uint8Array(data));
+        if (ArrayBuffer.isView(data)) return this._bytes(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+        if (data && typeof data.stream === 'function') {          // a Blob, or a ranged fileBlob — stream it
+          const rd = data.stream().getReader();
+          for (;;) { const { done, value } = await rd.read(); if (done) break; await this._bytes(value); }
+          return;
+        }
+        if (data && typeof data.arrayBuffer === 'function') return this._bytes(new Uint8Array(await data.arrayBuffer()));
+        throw err('TypeError', 'unsupported write data');
+      }
+      async _finish() { if (this._done) return; this._done = true; await this._flush(); const w = await this._open(); await call('close', { w }, { method: 'POST' }); }
+      async _drop() { if (this._done) return; this._done = true; this._acc = []; this._n = 0; if (this._w) await call('abort', { w: this._w }, { method: 'POST' }).catch(() => {}); }
+      // the FSAA conveniences — they take the stream's writer, so a later pipeTo() sees it locked (as with FSAA)
+      _wr() { return this._writer || (this._writer = this.getWriter()); }
+      write(data) { return this._wr().write(data); }
+      seek() { return Promise.reject(err('NotSupportedError', 'seek — the tree writer is sequential')); }
+      truncate() { return Promise.reject(err('NotSupportedError', 'truncate — the tree writer is sequential')); }
+      close() { return this._writer ? this._writer.close() : super.close(); }
+      abort(reason) { return this._writer ? this._writer.abort(reason) : super.abort(reason); }
+    }
+    class TreeFileHandle {
+      constructor(dir, path, name, uri) { this.kind = 'file'; this.name = name; this.__leadacidTree = { dir, path, uri, kind: 'file' }; }
+      async queryPermission() { return 'granted'; }
+      async requestPermission() { return 'granted'; }
+      async isSameEntry(o) { const a = o && o.__leadacidTree, t = this.__leadacidTree; return !!(a && a.uri === t.uri && a.path === t.path); }
+      async getFile() {
+        const t = this.__leadacidTree;
+        const i = await call('token', { dir: t.dir, path: t.path });
+        const b = fileBlob(i.token, i.size, this.name); b.lastModified = i.mtime || 0;
+        return b;
+      }
+      async createWritable() { return new TreeWritable(this.__leadacidTree); }
+    }
+    class TreeDirHandle {
+      constructor(dir, path, name, uri) { this.kind = 'directory'; this.name = name; this.__leadacidTree = { dir, path, uri, kind: 'directory' }; }
+      async queryPermission() { return 'granted'; }
+      async requestPermission() { return 'granted'; }
+      async isSameEntry(o) { const a = o && o.__leadacidTree, t = this.__leadacidTree; return !!(a && a.uri === t.uri && a.path === t.path); }
+      _child(name) { if (!name || name.includes('/')) throw err('TypeError', 'a name, not a path'); const p = this.__leadacidTree.path; return p ? p + '/' + name : name; }
+      async _stat(path) { try { return await call('stat', { dir: this.__leadacidTree.dir, path }); } catch (e) { if (e.name === 'NotFoundError') return null; throw e; } }
+      async getFileHandle(name, { create = false } = {}) {
+        const t = this.__leadacidTree, p = this._child(name);
+        let s = await this._stat(p);
+        if (!s) {
+          if (!create) throw err('NotFoundError', name);
+          const w = new TreeWritable({ dir: t.dir, path: p }); await w.close();   // an empty file, like FSAA's create
+          s = { kind: 'file' };
+        }
+        if (s.kind !== 'file') throw err('TypeMismatchError', name + ' is a directory');
+        return new TreeFileHandle(t.dir, p, name, t.uri);
+      }
+      async getDirectoryHandle(name, { create = false } = {}) {
+        const t = this.__leadacidTree, p = this._child(name);
+        let s = await this._stat(p);
+        if (!s) { if (!create) throw err('NotFoundError', name); await call('mkdir', { dir: t.dir, path: p }, { method: 'POST' }); s = { kind: 'directory' }; }
+        if (s.kind !== 'directory') throw err('TypeMismatchError', name + ' is a file');
+        return new TreeDirHandle(t.dir, p, name, t.uri);
+      }
+      async removeEntry(name, { recursive = false } = {}) {
+        await call('remove', { dir: this.__leadacidTree.dir, path: this._child(name), recursive: recursive ? 1 : 0 }, { method: 'POST' });
+      }
+      async resolve(h) {
+        const a = h && h.__leadacidTree, t = this.__leadacidTree;
+        if (!a || a.uri !== t.uri) return null;
+        if (a.path === t.path) return [];
+        const pre = t.path ? t.path + '/' : '';
+        return a.path.startsWith(pre) ? a.path.slice(pre.length).split('/') : null;
+      }
+      async *entries() {
+        const t = this.__leadacidTree;
+        for (const e of await call('list', { dir: t.dir, path: t.path })) {
+          const p = this._child(e.name);
+          yield [e.name, e.kind === 'directory' ? new TreeDirHandle(t.dir, p, e.name, t.uri) : new TreeFileHandle(t.dir, p, e.name, t.uri)];
+        }
+      }
+      async *keys() { for await (const [k] of this.entries()) yield k; }
+      async *values() { for await (const [, v] of this.entries()) yield v; }
+      [Symbol.asyncIterator]() { return this.entries(); }
+    }
+    const leaf = (p) => p.split('/').pop();
+    return {
+      /** Does this instrument carry the tree plugin? (cached) */
+      async probe() { if (probed == null) { try { probed = (await native('tree/info')).ok; } catch { probed = false; } } return probed; },
+      /** The system folder picker → a directory handle, or null when the user backs out.
+       *  `initial` = where it opens (a documents docId, e.g. 'primary:Download'); a hint, not a constraint. */
+      async pick({ initial } = {}) { const r = await call('pick', initial ? { initial } : null, { method: 'POST' }); return r.cancelled ? null : new TreeDirHandle(r.dir, '', r.name, r.uri); },
+      /** A folder picked before (its persisted grant) → a live handle; NotFoundError if the grant is gone. */
+      async restore(uri) { const r = await call('restore', { uri }); return new TreeDirHandle(r.dir, '', r.name, r.uri); },
+      /** A structured clone of a handle (out of IndexedDB) → a live handle. Non-tree values pass through. */
+      async rehydrate(h) {
+        if (!h || h instanceof TreeDirHandle || h instanceof TreeFileHandle) return h;
+        const t = h.__leadacidTree; if (!t) return h;
+        const r = await call('restore', { uri: t.uri });
+        return t.kind === 'file' ? new TreeFileHandle(r.dir, t.path, h.name || leaf(t.path), t.uri)
+          : new TreeDirHandle(r.dir, t.path, t.path ? (h.name || leaf(t.path)) : r.name, t.uri);
+      },
+      isTreeHandle(h) { return !!(h && h.__leadacidTree); },
+    };
+  })();
+
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera, tree };
 })();
 
 /**

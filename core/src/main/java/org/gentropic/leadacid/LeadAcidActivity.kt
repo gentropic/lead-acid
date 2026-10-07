@@ -398,7 +398,10 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
             val r = inner.handle(path) ?: return null
             if (!path.endsWith(".html", ignoreCase = true)) return r
             val html = r.data?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return r
-            val opened = html.replaceFirst("connect-src 'none'", "connect-src 'self'")
+            // ONLY inside the CSP <meta> — an artifact's prose may mention the directive
+            // before the tag (lamina's header comment does), and that must not be the hit
+            val csp = Regex("(<meta[^>]*Content-Security-Policy[^>]*content=\")([^\"]*)(\")", RegexOption.IGNORE_CASE)
+            val opened = csp.replace(html) { m -> m.groupValues[1] + m.groupValues[2].replace("connect-src 'none'", "connect-src 'self'") + m.groupValues[3] }
             return WebResourceResponse("text/html", "utf-8", opened.byteInputStream(Charsets.UTF_8))
         }
     }

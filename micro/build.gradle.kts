@@ -88,4 +88,6 @@ tasks.matching { it.name.startsWith("generate") || it.name.startsWith("merge") }
 dependencies {
     implementation(project(":core"))
     implementation(project(":plugin-intake"))   // "open with micro": shared / opened files arrive as fs tokens (mmap reads)
+    implementation(project(":plugin-share"))    // exports out: publish to Downloads + the share sheet (brings the FileProvider)
+    implementation(project(":plugin-tree"))     // project folders: the system folder picker served as a directory tree
 }

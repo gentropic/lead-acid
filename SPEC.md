@@ -222,6 +222,21 @@ File — the 17 MB block model opens never-resident, 324 k blocks in 3.8 s on th
 VIEW intent. The desktop guard is `test/micro-shell-smoke.mjs` (the built file must STILL say
 `connect-src 'none'`: opening it is the shell's serve-time act, never the artifact's).
 
+**The way OUT, and project folders (2026-10-07).** A WebView has no DownloadListener here (by
+design) and a `blob:` `<a download>` goes nowhere; worse, `showSaveFilePicker` and
+`showDirectoryPicker` are DEFINED in the WebView and abort instantly — the worst kind of
+present, since feature detection says yes. So inside the shell an artifact's exports go through
+ONE door: `shell.publish` to Downloads (durable, visible to Files and other apps) with the share
+sheet offered from the status bar (micro's `deliverBlob`, lamina's `deliverBytes`). And project
+folders come from the **`tree` plugin**: `shell.tree.pick()` opens the system folder picker and
+returns a File System Access-SHAPED directory handle (getFileHandle / getDirectoryHandle /
+removeEntry / entries / resolve / getFile → a ranged `fileBlob` / createWritable → a real
+`WritableStream` so `blob.stream().pipeTo(w)` works); handles survive a structured clone
+(IndexedDB) and `shell.tree.rehydrate(obj)` brings one back, re-validating the persisted grant.
+An artifact decides by the SHELL's answer (`shell.tree.probe()`), never by the API's presence. `pick({ initial: 'primary:Download' })` says where the picker OPENS (a hint; micro starts in Downloads — the user navigates anywhere). The CSP rewrite (`shellConnect`) targets the `<meta>` tag only — an artifact's prose may mention the directive first (lamina's header comment did, and the first rewrite hit it).
+micro saves and reopens a whole project through it unchanged (`test/micro-shell-smoke.mjs` §5);
+lamina is the second posture-A instrument on the same recipe (`test/lamina-shell-smoke.mjs`).
+
 Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter** (`shell.fsBackend(Backend)` — a `readRange`/`rangeReadable`-true subclass), so Works/notebook artifacts mount phone storage with zero new concepts.
 
 **BUILT + validated (2026-07-19).** `lead-acid.js` ships: `present`, `native`, `stream`,
@@ -277,6 +292,7 @@ the build trigger. A row moves up from §5.1b only when an instrument names it.
 | `spp` | aupro (external RTK receivers) | `connect`, `stream`, `mockloc/start` | Bluetooth Classic serial to external RTK receivers + system mock location provider |
 | `camera` | wuffle v3 (outcrop photo) → the camera app | `preview` (stream), `capture`, `params` | CameraX: RAW, manual, multi-lens, RAW14 — full design in `docs/camera-plugin.md` (the transparent-WebView native-preview composite; capture bytes ride the response body; getUserMedia is the no-plugin basic path) |
 | `attest` | the first data-producing instrument — land early (the starred sleeper) | `POST /native/attest/sign`, `keyinfo` | Hardware keystore (StrongBox/TEE) signing of capture hashes — cryptographic provenance for field data |
+| `tree` | micro (project folders) | `POST pick`, `GET restore/list/stat/token`, `POST mkdir/remove/rename/open/write/close/abort` | A folder the user picks (ACTION_OPEN_DOCUMENT_TREE, grant persisted) as a directory tree. `lead-acid.js` serves it as File System Access-shaped handles (`shell.tree.pick/restore/rehydrate`), so a project-folder artifact runs unchanged. Exists because the WebView DEFINES `showDirectoryPicker` and aborts it instantly |
 | `intake` | aupro (the packer's front door) | (manifest share target → `stream`) | Android share sheet as input: pipe shared files/text into an artifact |
 | `share` | every instrument's export gesture | `POST /native/share` | Outbound twin of `intake`: hand a file or text to the system share sheet (Web Share API is absent in WebView). The natural "export this log" gesture |
 | `notify` | background workers (M4) | `POST /native/notify` | Post/cancel notifications outside service contexts ("post-processing finished") — the Notifications web API is absent in WebView |
