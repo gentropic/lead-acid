@@ -9,5 +9,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- the logger: a foreground service of type location (API 34+ requires the typed
+         permission), with a truthful ongoing notification (API 33+ asks for POST_NOTIFICATIONS) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <application>
+        <service
+            android:name="org.gentropic.leadacid.gnss.GnssLogService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+    </application>
 </manifest>

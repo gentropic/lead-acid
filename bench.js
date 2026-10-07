@@ -102,6 +102,27 @@
     },
     'intake/pending': function () { return jsonResp(intakeQueue.splice(0)); },
     'gnss/permission': function () { return jsonResp({ granted: fx.locationGranted, canRequest: true }); },
+    'gnss/log/start': function (req) {
+      if (logSession && !logSession.stoppedAt) return new Response(JSON.stringify({ error: 'busy', holder: logSession.name }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      var name = req.query.name || ('gnss-' + Date.now());
+      logSession = { name: name, what: (req.query.what || 'raw,location').split(','), epochs: 0, fixes: 0, nmea: 0, bytes: 0, startedAt: Date.now(), stoppedAt: 0, lines: ['{"kind":"start","name":"' + name + '"}'] };
+      logSession.iv = setInterval(function () {
+        logSession.epochs++; logSession.lines.push('{"kind":"raw","t":' + Date.now() + ',"measurements":[]}');
+        if (logSession.epochs % 2 === 0) { logSession.fixes++; logSession.lines.push('{"kind":"fix","t":' + Date.now() + ',"lat":' + fx.fix.lat + ',"lon":' + fx.fix.lon + '}'); }
+        logSession.bytes = logSession.lines.join('\n').length + 1;
+      }, 100);
+      return jsonResp({ name: name, what: req.query.what || 'raw,location', startedAt: logSession.startedAt });
+    },
+    'gnss/log/stop': function () {
+      if (!logSession || logSession.stoppedAt) return new Response(JSON.stringify({ error: 'Not Found', detail: 'no log is running' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+      clearInterval(logSession.iv); logSession.stoppedAt = Date.now();
+      logSession.lines.push('{"kind":"stop","epochs":' + logSession.epochs + '}');
+      var token = 'gnss-log-' + logSession.name;
+      fx.files[token] = new TextEncoder().encode(logSession.lines.join('\n') + '\n');
+      logSession.bytes = fx.files[token].length; logSession.token = token;
+      return jsonResp(logSummary());
+    },
+    'gnss/log/status': function () { return jsonResp(logSession ? logSummary() : { running: false }); },
     'camera/list': function () { return jsonResp([{ id: '0', facing: 'back', hasRaw: true, focalLengthsMm: [6.5], sensorMm: [9.8, 7.3], pixels: [4000, 3000] }]); },
     'camera/permission': function () { return jsonResp({ granted: true, canRequest: true }); },
     'gnss/location': function (req) {
@@ -202,6 +223,11 @@
     });
   };
 
+  var logSession = null;
+  function logSummary() {
+    var s = logSession;
+    return { running: !s.stoppedAt, name: s.name, token: s.token || null, what: s.what, epochs: s.epochs, fixes: s.fixes, nmea: s.nmea, bytes: s.bytes, lastFix: s.fixes ? '±5 m' : 'no fix', startedAt: s.startedAt, stoppedAt: s.stoppedAt || null };
+  }
   // intake: fixtures `intake: [items]` arrive when the page opens the stream;
   // `window.__bench.intake(items)` injects more later (a smoke "sharing" a file).
   // A file item needs its bytes in `__bench.files[token]` (= the fs fixtures).

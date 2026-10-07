@@ -61,4 +61,11 @@ interface PluginHost {
      * like any SAF pick — register when the page asks, not when the URI arrives.
      */
     fun registerFile(uri: android.net.Uri): String?
+
+    /**
+     * Serve an app-private file a plugin produced (a sealed log) under a DURABLE
+     * fs token — survives page starts, so the page that reattaches after a
+     * reload can still read it. Re-registering replaces.
+     */
+    fun serveFile(token: String, file: java.io.File): String
 }

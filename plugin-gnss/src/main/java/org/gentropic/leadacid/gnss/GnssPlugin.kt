@@ -3,6 +3,7 @@ package org.gentropic.leadacid.gnss
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.location.GnssMeasurementsEvent
 import android.location.GnssStatus
 import android.location.Location
@@ -34,6 +35,13 @@ import java.util.concurrent.TimeUnit
  *   GET /native/gnss/nmea                         → `nmea`   {t, s}
  *   GET /native/gnss/permission?request=1         → {granted, canRequest} (prompts when asked)
  *
+ * The LOGGER (a foreground service, GnssLogService — capture survives the screen
+ * going off and the WebView going away; the page re-attaches via status):
+ *   POST /native/gnss/log/start?what=raw,location,nmea,status&name=   → {name, startedAt} | 409 if running
+ *   POST /native/gnss/log/stop                                        → {name, token, epochs, fixes, nmea, bytes}
+ *                                                                       the sealed file served as fs token `token`
+ *   GET  /native/gnss/log/status                                      → {running, name, token?, epochs, fixes, nmea, bytes, startedAt, stoppedAt?}
+ *
  * THE FIRST DANGEROUS PERMISSION. ACCESS_FINE_LOCATION is declared by THIS
  * module's manifest; a stream-open asks the host to request it and waits (the
  * interceptor thread is ours to block) — the user answers the system dialog
@@ -51,8 +59,54 @@ class GnssPlugin(private val host: PluginHost) : Plugin {
     override fun handle(req: BridgeRequest): BridgeResponse = when (req.subpath) {
         "permission" -> permission(req.query["request"] != null)
         "location", "status", "raw", "nmea" -> withPermission { open(req) }
+        "log/start" -> withPermission { logStart(req) }
+        "log/stop" -> logStop()
+        "log/status" -> logStatus()
         else -> BridgeResponse.error(404, "Not Found", "gnss/${req.subpath}")
     }
+
+    // ── the logger ───────────────────────────────────────────────────────────
+    private fun logToken(name: String) = "gnss-log-$name"
+
+    private fun logStart(req: BridgeRequest): BridgeResponse {
+        if (req.method != "POST") return BridgeResponse.error(405, "Method Not Allowed", req.method)
+        val running = GnssLogService.session?.takeIf { it.stoppedAt == 0L }
+        if (running != null)
+            return BridgeResponse.json(409, "Conflict", """{"error":"busy","holder":${BridgeResponse.jsonStr(running.name)},"detail":"a log is running — stop it first"}""")
+        val name = (req.query["name"] ?: "gnss-" + System.currentTimeMillis()).replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val what = req.query["what"] ?: "raw,location"
+        // the notification is a UX surface (SPEC §5); ask for it, don't require it
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !host.hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+            host.activity.runOnUiThread { host.requestPermission(Manifest.permission.POST_NOTIFICATIONS) { } }
+        }
+        val i = Intent(host.context, GnssLogService::class.java).setAction(GnssLogService.ACTION_START)
+            .putExtra(GnssLogService.EXTRA_NAME, name).putExtra(GnssLogService.EXTRA_WHAT, what)
+        host.context.startForegroundService(i)
+        // the service sets `session` on its main-thread onStartCommand; wait briefly for it
+        var s: GnssLogService.Session? = null
+        for (k in 0 until 50) { s = GnssLogService.session?.takeIf { it.name == name && it.stoppedAt == 0L }; if (s != null) break; Thread.sleep(20) }
+        return if (s == null) BridgeResponse.error(500, "Logger Failed", "the service did not start")
+        else BridgeResponse.json(200, "OK", """{"name":${BridgeResponse.jsonStr(s.name)},"what":${BridgeResponse.jsonStr(what)},"startedAt":${s.startedAt}}""")
+    }
+
+    private fun logStop(): BridgeResponse {
+        val s = GnssLogService.session?.takeIf { it.stoppedAt == 0L }
+            ?: return BridgeResponse.error(404, "Not Found", "no log is running")
+        host.context.startService(Intent(host.context, GnssLogService::class.java).setAction(GnssLogService.ACTION_STOP))
+        for (k in 0 until 100) { if (s.stoppedAt != 0L) break; Thread.sleep(20) }
+        if (s.stoppedAt == 0L) return BridgeResponse.error(500, "Logger Failed", "the service did not stop")
+        val token = host.serveFile(logToken(s.name), s.file)
+        return BridgeResponse.json(200, "OK", summary(s, token))
+    }
+
+    private fun logStatus(): BridgeResponse {
+        val s = GnssLogService.session ?: return BridgeResponse.json(200, "OK", """{"running":false}""")
+        val token = if (s.stoppedAt != 0L) host.serveFile(logToken(s.name), s.file) else null
+        return BridgeResponse.json(200, "OK", summary(s, token))
+    }
+
+    private fun summary(s: GnssLogService.Session, token: String?) =
+        """{"running":${s.stoppedAt == 0L},"name":${BridgeResponse.jsonStr(s.name)},"token":${if (token == null) "null" else BridgeResponse.jsonStr(token)},"what":[${s.what.joinToString(",") { BridgeResponse.jsonStr(it) }}],"epochs":${s.epochs.get()},"fixes":${s.fixes.get()},"nmea":${s.nmea.get()},"bytes":${s.bytes},"lastFix":${BridgeResponse.jsonStr(s.lastFix)},"startedAt":${s.startedAt},"stoppedAt":${if (s.stoppedAt == 0L) "null" else s.stoppedAt.toString()}}"""
 
     private val FINE = Manifest.permission.ACCESS_FINE_LOCATION
 

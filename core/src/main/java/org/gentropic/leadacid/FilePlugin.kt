@@ -119,6 +119,20 @@ class FilePlugin(
         }
     }
 
+    /**
+     * Serve an app-private file under a durable token (survives page starts —
+     * a plugin's finished output, e.g. a sealed GNSS log). Re-registering a
+     * token replaces it (the file may have grown since).
+     */
+    @Synchronized
+    fun registerBuiltin(token: String, file: java.io.File): String {
+        sources.remove(token)?.release()
+        val ch = RandomAccessFile(file, "r").channel
+        sources[token] = Source(ch, file.length(), ch)
+        builtins += token
+        return token
+    }
+
     /** Page-generation lifecycle: drop all SAF sources (keep built-ins). */
     @Synchronized
     fun releaseSaf() {

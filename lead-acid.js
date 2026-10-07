@@ -268,6 +268,32 @@ export const shell = (() => {
     nmea: () => gnssOpen('gnss/nmea'),
     /** {granted, canRequest}; request:true shows the dialog if needed */
     async permission({ request = false } = {}) { return (await native('gnss/permission' + (request ? '?request=1' : ''))).json(); },
+    /**
+     * The logger: a foreground service captures with the screen off; the page
+     * re-attaches via status() after a reload. stop() seals the file and
+     * returns its fs token (+ `source`) for publish/share.
+     */
+    log: {
+      async start({ what = ['raw', 'location'], name } = {}) {
+        const q = `?what=${encodeURIComponent(what.join(','))}${name ? '&name=' + encodeURIComponent(name) : ''}`;
+        const r = await native('gnss/log/start' + q, { method: 'POST' });
+        const j = await r.json();
+        if (!r.ok) { const e = new Error(j.detail || j.error || ('log start failed: ' + r.status)); e.status = r.status; e.info = j; throw e; }
+        return j;
+      },
+      async stop() {
+        const r = await native('gnss/log/stop', { method: 'POST' });
+        const j = await r.json();
+        if (!r.ok) { const e = new Error(j.detail || ('log stop failed: ' + r.status)); e.status = r.status; throw e; }
+        if (j.token) j.source = fileSource(j.token, j.bytes);
+        return j;
+      },
+      async status() {
+        const j = await (await native('gnss/log/status')).json();
+        if (j.token) j.source = fileSource(j.token, j.bytes);
+        return j;
+      },
+    },
   };
   async function gnssOpen(path) {
     try { return await stream(path); }

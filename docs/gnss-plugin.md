@@ -6,8 +6,16 @@ raw GNSS is genuinely fiddly. **BUILT 2026-10-07 (`plugin-gnss`): the four push 
 stream-open blocks the interceptor thread on the host's permission request (the system dialog
 answers it; a refusal → 403 `{canRequest}`); handler-based `LocationManager` callbacks on a
 HandlerThread (the executor overloads need API 30/31, minSdk is 29). Verified on the S24+: a real
-GPS fix reaches wuffle v3, which stamps each measurement with lat/lon/accuracy. NOT yet built:
-the foreground-service logger (`log/start` / `log/stop`) and the WMM declination module.** *Drivers: the raw-GNSS logger instrument; wuffle v3 (station
+GPS fix reaches wuffle v3, which stamps each measurement with lat/lon/accuracy. The WMM
+declination module is `@gcu/wmm` in the monorepo (wuffle reads true north). **The LOGGER is BUILT
+too (same day): `GnssLogService`, lead-acid's first foreground service (type `location`; the
+typed FGS permission + POST_NOTIFICATIONS ride in this module's manifest with the `<service>`),
+`log/start?what=raw,location,nmea,status&name=` (409 while one runs) / `log/stop` / `log/status`;
+one JSON line per event into an app-private `<name>.jsonl`, the notification states the real
+state ("GNSS logging — 64 epochs · ±0.6 m", with a Stop action), `stop` seals the file and serves
+it as a durable fs token for publish/share, `status` is how a reloaded page re-attaches. Measured
+on the S24+: 15 s with the screen OFF → epochs 65 → 82 (≈1 Hz raw, no duty-cycling gap on this
+device), fixes 53 → 70; the sealed file had 82 raw epochs with real per-SV measurements.** *Drivers: the raw-GNSS logger instrument; wuffle v3 (station
 coordinates + the path to declination).*
 
 Ordinary web geolocation (`navigator.geolocation`) already works in the shell (the §7c
@@ -48,7 +56,7 @@ POST /native/gnss/log/stop
 **All the data rides the port push lane** (§4.2) — no body sidecar (gnss is read-mostly; log config
 is small query/JSON). Control (log start/stop) = request/reply.
 
-## The logger = first foreground-service plugin
+## The logger = first foreground-service plugin  *(built — see the status above)*
 
 `log/start` runs a **foreground service** so raw logging survives the screen going off (the SPEC's
 foreground-service-plugin plumbing, first real user). The service holds the GNSS callbacks, appends

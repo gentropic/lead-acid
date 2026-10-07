@@ -96,6 +96,7 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
 
     override fun onIntent(handler: (Intent) -> Unit) { intentHandlers += handler }
     override fun registerFile(uri: Uri): String? = filePlugin.registerSaf(uri, contentResolver)
+    override fun serveFile(token: String, file: File): String = filePlugin.registerBuiltin(token, file)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
