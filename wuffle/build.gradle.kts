@@ -52,6 +52,12 @@ android {
     }
 
     buildTypes {
+        // A debug build installs BESIDE the real instrument (different id), so
+        // developing never clobbers — or is blocked by — the signed install.
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = false
             if (ksProps.exists()) signingConfig = signingConfigs.getByName("release")

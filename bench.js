@@ -35,16 +35,12 @@
     if (w) { bodyWaiters.delete(id); w(buf.slice(12)); }
   };
   shellSide.start && shellSide.start();
-  // Deliver the port AFTER the page's module (lead-acid.js) registers its
-  // listener. bench.js is a blocking classic <script> that runs during head
-  // parse; deferred module scripts execute at end-of-parse, BEFORE
-  // DOMContentLoaded — so that event is the reliable "modules have run" hook.
-  // (A setTimeout(0) can beat the deferred module and the port gets lost.)
+  // The page PULLS the port (GET /native/shell/port) once lead-acid.js has its
+  // listener — same as the real shell, so delivery can't race module
+  // evaluation however the artifact is bundled. Nothing is pushed unasked.
   function deliverPort() {
     window.dispatchEvent(new MessageEvent('message', { data: '__leadacid_port', ports: [pageSide] }));
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', deliverPort);
-  else deliverPort();
 
   // The real shell splices the plugin's JSON into the message as an OBJECT
   // (`"d":$data`), so the page sees m.d parsed — never a string. Match it.
@@ -82,6 +78,7 @@
   var routes = {
     'shell/info': function () { return jsonResp({ present: true, version: fx.version }); },
     'shell/keepawake': function () { return jsonResp({ ok: true }); },
+    'shell/port': function () { deliverPort(); return jsonResp({ ok: true }); },
     'shell/closestream': function (req) {
       var id = req.query.id, s = streams.get(id);
       if (s) { s.stop(); streams.delete(id); pushClose(id); }

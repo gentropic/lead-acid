@@ -5,8 +5,11 @@
 > **BUILT 2026-10-06.** Modules, factories, host, template — all as below, with the deviations
 > recorded in "What landed differently" at the end. Verification: items 2–3 done (JS untouched;
 > the FileProvider witness holds: template without `plugin-share` → 0 providers, with → 1).
-> Item 1 (the on-device bench battery) is **pending a plugged-in phone** — the refactor moved
-> code without changing behavior, but it has not yet been re-run on the S24+.
+> Item 1 (the on-device bench battery) **PASSED on the S24+ 2026-10-07** — 13/13 (ranged
+> reads 61 MB/s, push stream 100 events/2 s with 0 clumps, attest on StrongBox, fs/publish,
+> shell/info `0.1-m2`, keepawake) — after one real finding: the built wuffle hung on every
+> body call and stream because the port was pushed at `onPageFinished` before a registry
+> bundle's modules had a listener. The page pulls the port now (SPEC §4.3).
 Phase 1 only: the Gradle module split, the plugin-registration API, and the manifest-merge model.
 Signing / release / wuffle-app are Phase 2; the pack script + stranger-docs are Phase 3.
 

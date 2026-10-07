@@ -156,7 +156,7 @@ interceptor, and more than half the catalog's calls carry one (`fs/publish`, `nn
   either arrival order, 5 s timeout). The fetch remains the spine — routing, status codes, §4.6
   error semantics all unchanged — and the artifact never sees the seam. One mechanism for a
   200-byte JSON and a 40 MB DNG alike: no base64, no size cliff, binary crosses as binary. The
-  port is delivered on `onPageFinished` via `WebViewCompat.postWebMessage`; `lead-acid.js` holds
+  port is delivered on the page's request (`GET /native/shell/port`, see below) via `WebViewCompat.postWebMessage`; `lead-acid.js` holds
   it as a **promise** so a body call before the port arrives just awaits it (no load-order race).
   First user: `fs/publish` — verified byte-exact end to end (JS Uint8Array → port → MediaStore →
   Downloads).
@@ -180,6 +180,15 @@ export const shell = {
   stream: (path) => new EventSource('/native/' + path),
 };
 ```
+
+**The page PULLS the port (2026-10-07, found on device).** The shell no longer posts the
+WebMessagePort at `onPageFinished`: a bundle whose modules evaluate after the load event (the
+monorepo's registry/blob-URL build — built wuffle, micro) has no listener yet at that moment, the
+port message is dropped, and every body-carrying call and push stream hangs forever. Now
+`lead-acid.js` asks for it (`GET /native/shell/port`) right after registering its listener; the
+shell creates a fresh channel per request and the newest is the live one on both sides. Delivery
+is order-independent by construction. The desktop bench serves the same route and pushes nothing
+unasked, so the bench smoke proves the pull through the real shim.
 
 Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter** (`shell.fsBackend(Backend)` — a `readRange`/`rangeReadable`-true subclass), so Works/notebook artifacts mount phone storage with zero new concepts.
 

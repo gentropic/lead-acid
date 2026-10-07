@@ -172,6 +172,7 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
                 }
             },
             onCloseStream = ::closePushStream,
+            onRequestPort = { runOnUiThread { establishBodyPort() } },
         ))
         for (factory in plugins) register(factory.create(this))
 
@@ -307,9 +308,10 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
                 bodyById.clear()
             }
 
-            override fun onPageFinished(view: WebView, url: String?) {
-                establishBodyPort()
-            }
+            // The port is PULLED by the page (GET /native/shell/port) once its
+            // listener exists — never pushed at onPageFinished, where a bundle
+            // whose modules evaluate after load would miss it (found on device:
+            // the built wuffle hung on every body call and stream).
 
             override fun shouldInterceptRequest(
                 view: WebView,
@@ -428,6 +430,8 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
      * SPEC §4.3: hand the page one end of a WebMessagePort. The page posts
      * [id(12 ascii bytes) | body] as an ArrayBuffer; we split, and complete the
      * future the interceptor is waiting on. `window.__leadacid_port` receives it.
+     * Called on the page's request (shell/port); each call makes a fresh channel
+     * and the newest becomes the live one on both sides.
      */
     private fun establishBodyPort() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.CREATE_WEB_MESSAGE_CHANNEL) ||

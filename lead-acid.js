@@ -14,12 +14,16 @@
 export const shell = (() => {
   const present = typeof __leadacid !== 'undefined';
 
-  // The body sidecar (SPEC §4.3): the shell posts one WebMessagePort to the
-  // page as `__leadacid_port`. We post [id(12 ascii) | body] as an ArrayBuffer,
-  // then fetch with the id in a header; the shell joins them into req.body.
-  // portReady is a PROMISE so a body-carrying call before the port arrives just
-  // awaits it — no race regardless of when the module loads vs onPageFinished.
-  let resolvePort;
+  // The body sidecar (SPEC §4.3): the shell hands the page one end of a
+  // WebMessagePort as `__leadacid_port`. We post [id(12 ascii) | body] as an
+  // ArrayBuffer, then fetch with the id in a header; the shell joins them into
+  // req.body. THE PAGE PULLS THE PORT: this module asks for it
+  // (GET /native/shell/port) once its listener is registered, so delivery can't
+  // race module evaluation — a built bundle whose modules evaluate after the
+  // page's load event (the registry/blob-URL build) would otherwise miss a port
+  // pushed at onPageFinished, and every body call + stream would hang. The shell
+  // creates a fresh channel per request; the latest one is the live one.
+  let currentPort = null, resolvePort;
   const portReady = present ? new Promise((r) => { resolvePort = r; }) : Promise.resolve(null);
   // Push streams (SPEC §4.2): the shell posts {s:id, e:event, d:data} over the
   // SAME port (shell→page); no interceptor, no buffering, no padding. Routed by
@@ -29,6 +33,7 @@ export const shell = (() => {
     window.addEventListener('message', (e) => {
       if (e.data === '__leadacid_port' && e.ports && e.ports[0]) {
         const port = e.ports[0];
+        currentPort = port;
         port.onmessage = (ev) => {
           let m; try { m = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch { return; }
           if (!m || !m.s) return;
@@ -40,6 +45,10 @@ export const shell = (() => {
         resolvePort(port);
       }
     });
+    // ask for the port now that the listener exists (fire-and-forget; a shell
+    // that predates the route still pushes at onPageFinished and that path
+    // lands here too)
+    fetch('/native/shell/port').catch(() => {});
   }
   let bodySeq = 0;
   function newBodyId() {
@@ -61,13 +70,13 @@ export const shell = (() => {
   // pass {body} as if fetch carried it. Bodyless calls are plain fetch.
   async function native(path, opts) {
     if (opts && opts.body != null) {
-      const port = await portReady;
-      if (port) {
+      await portReady;
+      if (currentPort) {
         const id = newBodyId();
         const { body, headers, ...rest } = opts;
         // Post the body FIRST so the shell has it (or is about to) when the
         // tagged fetch lands; the shell's awaitBody() tolerates either order.
-        sendBody(port, id, body);
+        sendBody(currentPort, id, body);
         return fetch('/native/' + path, {
           ...rest,
           headers: { ...(headers || {}), 'X-LeadAcid-Body-Id': id },

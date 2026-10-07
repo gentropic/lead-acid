@@ -46,8 +46,15 @@ build time, it declares no plugin modules (core covers it), and its merged manif
 permission. See `docs/signing.md`.
 
 **M2 Phase 3 DONE** (2026-10-06): `pack-instrument.mjs` stamps a named instrument out of the
-template in one command, and this README is the stranger's recipe. **M2 is complete.** Still
-owed on-device: the bench battery re-run after the module split (no phone was attached).
+template in one command, and this README is the stranger's recipe. **M2 is complete and
+verified on the S24+** (2026-10-07): the harness battery 13/13 after the split, and wuffle v2 as
+its own app — fused compass at `high` accuracy, publish → `wuffle-log.csv` + a StrongBox `.sig`.
+The one real finding: the WebMessagePort used to be pushed at `onPageFinished`, which a bundle
+whose modules evaluate after load (the monorepo's registry build) never receives; the page pulls
+it now (`GET /native/shell/port`, SPEC §4.3).
+
+Debug builds of instruments install as `<applicationId>.debug` (an `applicationIdSuffix`), so
+developing never clobbers — or is blocked by — the signed install of the same instrument.
 
 ## Building
 
