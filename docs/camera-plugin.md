@@ -8,7 +8,9 @@ capability, focal lengths, sensor size, pixels) and `/permission?request=1` gets
 dialog out of the way before the viewfinder opens. wuffle v3's photo-per-station runs on plain
 `getUserMedia` → canvas → JPEG (asking for a 2560×1920 ideal frame; the S24+ gives 1920×2560,
 ~170 KB), published to Pictures beside the log. **Level 2 — this doc's CameraX/RAW plugin with
-the transparent-WebView composite — is NOT built.** *Drivers: wuffle v3 (an outcrop photo
+the transparent-WebView composite — is NOT built. When it is picked up, the first step is the
+COMPOSITE SPIKE (PLAN.md M3+): preview behind a transparent WebView + a floating capture button,
+on the S24+, before any route is written.** *Drivers: wuffle v3 (an outcrop photo
 stapled to a measurement); a dedicated RAW/manual camera app.*
 
 ## Two levels — know which you need

@@ -220,8 +220,14 @@ streaming instrument.
 
 - **`sensor`** (raw mag + rotation-vector + declination) → wuffle v2 precision. *(First real
   streaming plugin; carries the V-1 verification.)*
-- **`camera`** + **geolocation**/`gnss` → wuffle v3 (outcrop photo + station coords), then the
-  camera app.
+- **`camera`** + **geolocation**/`gnss` → wuffle v3 (outcrop photo + station coords) ✓ 2026-10-07
+  (camera level 1, gnss, the FGS logger, the gnsslog instrument). **Camera level 2 — NEXT when
+  picked up: the COMPOSITE SPIKE first.** One-file experiment in the dev harness: a CameraX
+  `PreviewView` BEHIND a transparent WebView, the artifact's capture button floating over the
+  live preview, touch routed; verified by screenshot + tap on the S24+. If it holds, the rest of
+  `docs/camera-plugin.md` (routes, manual exposure, RAW→DNG, multi-lens, big captures via the
+  response body) is known work; if not, the design needs a different preview answer before any
+  of that is worth writing. Parked 2026-10-07 by priority (no driving instrument yet), not blocked.
 - **file associations** (§6 VIEW intent-filter) → tapping a cloud opens micro.
 - **`intake`/`share`/`attest`/`ble`/`spp`** → land with **aupro** (the packer + `.aupro` +
   the rig instrument), the milestone all of this was really for.
