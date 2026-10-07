@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A satellite sky plot: horizon ring, elevation rings, three satellites.
+     108dp canvas, content inside the 72dp safe zone (18..90). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M54,22 A32,32 0 1,1 53.99,22 Z" android:strokeColor="#e6e3dc" android:strokeWidth="3" android:fillColor="#00000000" />
+    <path android:pathData="M54,33 A21,21 0 1,1 53.99,33 Z" android:strokeColor="#6a6f75" android:strokeWidth="1.5" android:fillColor="#00000000" />
+    <path android:pathData="M54,44 A10,10 0 1,1 53.99,44 Z" android:strokeColor="#6a6f75" android:strokeWidth="1.5" android:fillColor="#00000000" />
+    <path android:pathData="M54,18 L54,28" android:strokeColor="#e6e3dc" android:strokeWidth="3" android:strokeLineCap="round" />
+    <path android:pathData="M66,40 A4.5,4.5 0 1,1 65.99,40 Z" android:fillColor="#f0a040" />
+    <path android:pathData="M40,60 A4.5,4.5 0 1,1 39.99,60 Z" android:fillColor="#f0a040" />
+    <path android:pathData="M60,72 A4.5,4.5 0 1,1 59.99,72 Z" android:fillColor="#5aa2ff" />
+</vector>

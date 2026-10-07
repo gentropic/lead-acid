@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- gnsslog's manifest: label, icon, theme, activity. The permissions (FINE
+     location, the foreground service) and the <service> itself merge in from
+     plugin-gnss; the FileProvider from plugin-share. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="gnsslog"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity
+            android:name=".GnssLogActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

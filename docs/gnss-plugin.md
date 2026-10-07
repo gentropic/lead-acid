@@ -15,7 +15,7 @@ one JSON line per event into an app-private `<name>.jsonl`, the notification sta
 state ("GNSS logging — 64 epochs · ±0.6 m", with a Stop action), `stop` seals the file and serves
 it as a durable fs token for publish/share, `status` is how a reloaded page re-attaches. Measured
 on the S24+: 15 s with the screen OFF → epochs 65 → 82 (≈1 Hz raw, no duty-cycling gap on this
-device), fixes 53 → 70; the sealed file had 82 raw epochs with real per-SV measurements.** *Drivers: the raw-GNSS logger instrument; wuffle v3 (station
+device), fixes 53 → 70; the sealed file had 82 raw epochs with real per-SV measurements.** *Drivers: the raw-GNSS logger instrument (**`gnsslog`, built 2026-10-07** — `tools/gnsslog` in the monorepo, `gnsslog/` here: sky plot + C/N0 from the status stream, start/stop/re-attach/publish/share of a capture; on the S24+ 24 satellites across four constellations, a 12 s screen-off capture sealed at 111 KB and published); wuffle v3 (station
 coordinates + the path to declination).*
 
 Ordinary web geolocation (`navigator.geolocation`) already works in the shell (the §7c

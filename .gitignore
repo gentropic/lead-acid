@@ -37,3 +37,4 @@ app/src/main/assets/*.html
 # Instruments sync their artifact from the monorepo at build time (gradle.properties
 # leadacid.artifactsDir) — never commit the copy.
 wuffle/src/main/assets/
+gnsslog/src/main/assets/
