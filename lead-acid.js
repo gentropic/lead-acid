@@ -29,6 +29,10 @@ export const shell = (() => {
   // SAME port (shell→page); no interceptor, no buffering, no padding. Routed by
   // stream id to per-stream handlers.
   const pushStreams = new Map();   // id → { handlers: Map<event,Set>, onclose }
+  // A plugin may emit INSIDE the request that opens its stream (intake delivers
+  // the queue at once), so the first messages can land before stream() has
+  // learned the id. Hold them per unknown id and replay once it registers.
+  const early = new Map();         // id → [message] (bounded)
   if (present) {
     window.addEventListener('message', (e) => {
       if (e.data === '__leadacid_port' && e.ports && e.ports[0]) {
@@ -37,10 +41,12 @@ export const shell = (() => {
         port.onmessage = (ev) => {
           let m; try { m = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch { return; }
           if (!m || !m.s) return;
-          const st = pushStreams.get(m.s); if (!st) return;
-          if (m.close) { pushStreams.delete(m.s); st.onclose && st.onclose(); return; }
-          const set = st.handlers.get(m.e); if (set) for (const cb of set) cb(m.d);
-          const any = st.handlers.get('*'); if (any) for (const cb of any) cb(m.e, m.d);
+          const st = pushStreams.get(m.s);
+          if (!st) {
+            const q = early.get(m.s) || []; if (q.length < 256) q.push(m); early.set(m.s, q);
+            return;
+          }
+          dispatch(st, m);
         };
         resolvePort(port);
       }
@@ -49,6 +55,11 @@ export const shell = (() => {
     // that predates the route still pushes at onPageFinished and that path
     // lands here too)
     fetch('/native/shell/port').catch(() => {});
+  }
+  function dispatch(st, m) {
+    if (m.close) { pushStreams.delete(m.s); st.onclose && st.onclose(); return; }
+    const set = st.handlers.get(m.e); if (set) for (const cb of set) cb(m.d);
+    const any = st.handlers.get('*'); if (any) for (const cb of any) cb(m.e, m.d);
   }
   let bodySeq = 0;
   function newBodyId() {
@@ -99,6 +110,9 @@ export const shell = (() => {
     const handlers = new Map();
     const st = { handlers, onclose: null };
     pushStreams.set(id, st);
+    // replay what arrived before we knew the id — after the caller's .on()
+    // calls, which follow the await synchronously (hence a macrotask)
+    if (early.has(id)) { const q = early.get(id); early.delete(id); setTimeout(() => { for (const m of q) dispatch(st, m); }, 0); }
     const api = {
       on(event, cb) { let s = handlers.get(event); if (!s) handlers.set(event, s = new Set()); s.add(cb); return api; },
       onClose(cb) { st.onclose = cb; return api; },
@@ -225,7 +239,20 @@ export const shell = (() => {
     return api;
   }
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector };
+  // Items shared TO the instrument (SPEC §5.1 intake, share's inbound twin).
+  // A file arrives as an fs token with a ready `source` (readRange /
+  // arrayBuffer); text as text. Whatever was queued before the page asked —
+  // the share that launched the app — arrives first.
+  async function intake(onItem) {
+    const s = await stream('intake/stream');
+    s.on('item', (d) => {
+      if (d.kind === 'file') d.source = fileSource(d.token, d.size);
+      onItem(d);
+    });
+    return s;
+  }
+
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector, intake };
 })();
 
 /**

@@ -38,4 +38,5 @@ dependencies {
     implementation(project(":plugin-sensor"))
     implementation(project(":plugin-share"))
     implementation(project(":plugin-attest"))
+    implementation(project(":plugin-intake"))
 }

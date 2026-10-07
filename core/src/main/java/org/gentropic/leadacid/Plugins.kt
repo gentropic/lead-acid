@@ -47,4 +47,18 @@ interface PluginHost {
      */
     fun requestPermission(perm: String, onResult: (Boolean) -> Unit)
     fun hasPermission(perm: String): Boolean
+
+    /**
+     * See every Intent the activity receives — the launch intent (replayed to
+     * handlers registered during onCreate) and each onNewIntent. Main thread.
+     * The share-target plugin (`intake`) lives on this.
+     */
+    fun onIntent(handler: (Intent) -> Unit)
+
+    /**
+     * Register a content URI (a SAF pick, a shared file) as an fs token served
+     * by core's `fs` plugin (mmap-over-fd). Released on the next page start
+     * like any SAF pick — register when the page asks, not when the URI arrives.
+     */
+    fun registerFile(uri: android.net.Uri): String?
 }

@@ -15,12 +15,23 @@
         <activity
             android:name=".InstrumentActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- To take files in from the share sheet (the `intake` plugin), add a
+                 filter with the mime types your artifact handles — or stamp with
+                 pack-instrument.mjs and its intake flag (text/csv,text/plain):
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/csv" />
+            </intent-filter>
+            -->
         </activity>
     </application>
 </manifest>

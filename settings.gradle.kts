@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "lead-acid"
-include(":core", ":plugin-sensor", ":plugin-share", ":plugin-attest", ":app", ":template", ":wuffle")
+include(":core", ":plugin-sensor", ":plugin-share", ":plugin-attest", ":plugin-intake", ":app", ":template", ":wuffle")

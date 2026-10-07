@@ -3,6 +3,7 @@ package org.gentropic.wuffle
 import org.gentropic.leadacid.LeadAcidActivity
 import org.gentropic.leadacid.PluginFactory
 import org.gentropic.leadacid.attest.Attest
+import org.gentropic.leadacid.intake.Intake
 import org.gentropic.leadacid.sensor.Sensor
 
 /**
@@ -13,5 +14,5 @@ import org.gentropic.leadacid.sensor.Sensor
  * neither the rotation vector nor the keystore needs one.
  */
 class WuffleActivity : LeadAcidActivity() {
-    override val plugins: List<PluginFactory> = listOf(Sensor, Attest)
+    override val plugins: List<PluginFactory> = listOf(Sensor, Attest, Intake)
 }

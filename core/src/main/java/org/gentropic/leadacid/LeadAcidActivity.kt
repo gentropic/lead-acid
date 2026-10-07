@@ -89,9 +89,19 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
     private val reqSeq = AtomicInteger(1000)
     private val resultHandlers = ConcurrentHashMap<Int, (Int, Intent?) -> Unit>()
     private val permHandlers = ConcurrentHashMap<Int, (Boolean) -> Unit>()
+    private val intentHandlers = ArrayList<(Intent) -> Unit>()
 
     override val context: Context get() = this
     override val activity: ComponentActivity get() = this
+
+    override fun onIntent(handler: (Intent) -> Unit) { intentHandlers += handler }
+    override fun registerFile(uri: Uri): String? = filePlugin.registerSaf(uri, contentResolver)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        for (h in intentHandlers) h(intent)
+    }
 
     override fun startForResult(intent: Intent, handler: (Int, Intent?) -> Unit): Boolean {
         val code = reqSeq.incrementAndGet()
@@ -141,7 +151,11 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
     }
     private fun closeAllPushStreams() {
         val ids = pushStreams.keys.toList()
-        for (id in ids) pushStreams.remove(id)?.invoke()
+        for (id in ids) {
+            pushStreams.remove(id)?.invoke()
+            // tell the page — its onClose is how it knows to reopen on resume
+            postToPage("""{"s":${BridgeResponse.jsonStr(id)},"close":true}""")
+        }
     }
 
     override val pushBus: PushBus = object : PushBus {
@@ -175,6 +189,9 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
             onRequestPort = { runOnUiThread { establishBodyPort() } },
         ))
         for (factory in plugins) register(factory.create(this))
+        // the launch intent, replayed to whoever registered just now (a share
+        // that LAUNCHES the instrument arrives here, before any page exists)
+        intent?.let { i -> for (h in intentHandlers) h(i) }
 
         // §7b: Back. Predictive back is declared in core's manifest; this
         // callback makes the animation reflect what actually happens. Default

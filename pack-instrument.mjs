@@ -2,7 +2,8 @@
 // pack-instrument — the five-minute recipe as one command (PLAN M2 Phase 3).
 //
 //   node pack-instrument.mjs <module> --id <applicationId> --label "<name>"
-//                            [--artifact <built.html>] [--plugins sensor,share,attest]
+//                            [--artifact <built.html>] [--plugins sensor,share,attest,intake]
+//                            [--intake text/csv,text/plain]   (mime types the instrument takes in)
 //
 // Stamps a new instrument module out of template/: namespace + applicationId,
 // label, the plugin list (both the Gradle dependencies AND the activity's
@@ -24,6 +25,7 @@ const PLUGINS = {
   sensor: { module: ':plugin-sensor', imp: 'org.gentropic.leadacid.sensor.Sensor', factory: 'Sensor' },
   share: { module: ':plugin-share', imp: 'org.gentropic.leadacid.share.Share', factory: 'Share' },
   attest: { module: ':plugin-attest', imp: 'org.gentropic.leadacid.attest.Attest', factory: 'Attest' },
+  intake: { module: ':plugin-intake', imp: 'org.gentropic.leadacid.intake.Intake', factory: 'Intake' },
 };
 
 // ── args ─────────────────────────────────────────────────────────────────────
@@ -36,7 +38,7 @@ for (let i = 0; i < args.length; i++) {
 }
 const name = positional[0];
 const usage = () => {
-  console.error('usage: node pack-instrument.mjs <module> --id <applicationId> --label "<name>" [--artifact <built.html>] [--plugins sensor,share,attest]');
+  console.error('usage: node pack-instrument.mjs <module> --id <applicationId> --label "<name>" [--artifact <built.html>] [--plugins sensor,share,attest,intake] [--intake <mime,mime>]');
   process.exit(2);
 };
 if (!name || !flags.id || !flags.label) usage();
@@ -79,6 +81,12 @@ write(join(DEST, 'build.gradle.kts'), gradle);
 let manifest = read(join(TEMPLATE, 'src', 'main', 'AndroidManifest.xml'));
 manifest = must(manifest, 'android:label="lead-acid instrument"', 'template label')
   .replace('android:label="lead-acid instrument"', `android:label="${flags.label.replace(/"/g, '&quot;')}"`);
+// --intake: the commented share-target example becomes a real filter with these mime types
+const intakeMimes = (flags.intake || '').split(',').map((s) => s.trim()).filter(Boolean);
+if (intakeMimes.length && !plugins.includes('intake')) { console.error('--intake needs the intake plugin: add it to --plugins'); process.exit(2); }
+manifest = manifest.replace(/\n *<!-- To take files in from the share sheet[\s\S]*?-->\n/, intakeMimes.length
+  ? `\n            <!-- intake: shared / opened files reach the artifact -->\n            <intent-filter>\n                <action android:name="android.intent.action.SEND" />\n                <action android:name="android.intent.action.SEND_MULTIPLE" />\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n${intakeMimes.map((m) => `                <data android:mimeType="${m}" />`).join('\n')}\n            </intent-filter>\n`
+  : '\n');
 write(join(DEST, 'src', 'main', 'AndroidManifest.xml'), manifest);
 
 // ── 4. the activity: package, imports, factory list ─────────────────────────

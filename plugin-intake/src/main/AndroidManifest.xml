@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- intake plugin: contributes nothing to the merged manifest. The intent-filter
+     that makes an instrument a share target belongs on ITS activity (which this
+     library cannot name) — see template/src/main/AndroidManifest.xml. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

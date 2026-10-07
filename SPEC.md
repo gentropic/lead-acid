@@ -190,6 +190,18 @@ shell creates a fresh channel per request and the newest is the live one on both
 is order-independent by construction. The desktop bench serves the same route and pushes nothing
 unasked, so the bench smoke proves the pull through the real shim.
 
+**Push-lane details learned on device (2026-10-07, `intake`).** (1) A plugin may emit INSIDE
+the request that opens its stream — `intake` delivers its queue at once — so the first port
+messages can reach the page before `stream()` has learned the id. `lead-acid.js` holds messages
+for an unknown id (bounded) and replays them once the id registers, after the caller's `.on()`
+calls. (2) `onPause` closes every push stream and now TELLS the page (a `close` message per
+stream), so a page's `onClose` is how it reopens on resume — wuffle reopens its fused and intake
+streams that way. A share that reaches a RUNNING singleTask instrument pauses it briefly first,
+which is exactly when that matters. (3) Shared URIs are registered as fs tokens at DELIVERY
+time (when the page asks), never at intent time: a share that launches the instrument arrives
+in onCreate, before any page exists, and the page-generation lifecycle would release the token
+on the first page start.
+
 Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter** (`shell.fsBackend(Backend)` — a `readRange`/`rangeReadable`-true subclass), so Works/notebook artifacts mount phone storage with zero new concepts.
 
 **BUILT + validated (2026-07-19).** `lead-acid.js` ships: `present`, `native`, `stream`,
