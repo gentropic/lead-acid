@@ -3,6 +3,7 @@ package org.gentropic.wuffle
 import org.gentropic.leadacid.LeadAcidActivity
 import org.gentropic.leadacid.PluginFactory
 import org.gentropic.leadacid.attest.Attest
+import org.gentropic.leadacid.camera.Camera
 import org.gentropic.leadacid.gnss.Gnss
 import org.gentropic.leadacid.intake.Intake
 import org.gentropic.leadacid.sensor.Sensor
@@ -16,5 +17,5 @@ import org.gentropic.leadacid.sensor.Sensor
  * location, declared by that module's manifest, asked for on first use).
  */
 class WuffleActivity : LeadAcidActivity() {
-    override val plugins: List<PluginFactory> = listOf(Sensor, Attest, Intake, Gnss)
+    override val plugins: List<PluginFactory> = listOf(Sensor, Attest, Intake, Gnss, Camera)
 }

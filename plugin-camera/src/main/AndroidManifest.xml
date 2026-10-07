@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  camera plugin: the CAMERA permission rides here. With it merged in, the
+  shell's §7c onPermissionRequest grants getUserMedia (preview + JPEG capture
+  in plain web code) after the system dialog; without this module an
+  instrument's page is denied the camera outright. No storage permission —
+  captures go out via fs/publish (scoped MediaStore) or share.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+</manifest>

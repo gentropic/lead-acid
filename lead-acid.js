@@ -282,7 +282,20 @@ export const shell = (() => {
     }
   }
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector, intake, gnss };
+  // Camera, level 1 (SPEC §5.1 camera): the plugin brings the CAMERA permission
+  // and enumerates; preview/capture are plain getUserMedia in the page. Ask for
+  // the permission here first and the viewfinder opens without a second prompt.
+  const camera = {
+    /** [{id, facing, hasRaw, focalLengthsMm, sensorMm, pixels}] — [] without the plugin */
+    async list() { try { const r = await native('camera/list'); return r.ok ? r.json() : []; } catch { return []; } },
+    /** {granted, canRequest}; request:true shows the dialog if needed */
+    async permission({ request = false } = {}) {
+      try { const r = await native('camera/permission' + (request ? '?request=1' : '')); return r.ok ? r.json() : { granted: false, canRequest: false }; }
+      catch { return { granted: false, canRequest: false }; }
+    },
+  };
+
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera };
 })();
 
 /**

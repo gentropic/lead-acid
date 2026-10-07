@@ -95,4 +95,5 @@ dependencies {
     implementation(project(":plugin-attest"))   // v2: the published log is signed with the phone's hardware key
     implementation(project(":plugin-intake"))   // share a log back in: it reloads
     implementation(project(":plugin-gnss"))     // v3: every measurement carries its position (brings FINE location)
+    implementation(project(":plugin-camera"))   // v3: an outcrop photo per station (brings CAMERA; capture is plain getUserMedia)
 }

@@ -1,7 +1,14 @@
 # Camera plugin — `camera`
 
-**Design spec for CameraX capture (SPEC §5.1, committed).** Not built; specced now because the
-*preview* path has a real subtlety worth pinning down. *Drivers: wuffle v3 (an outcrop photo
+**Design spec for CameraX capture (SPEC §5.1, committed).** Specced because the *preview* path
+has a real subtlety worth pinning down. **Level 1 BUILT 2026-10-07 as `plugin-camera`:** the
+module's manifest brings `CAMERA` (merged into `app` + `wuffle`, absent from `template` — the
+second permission proof), `GET /native/camera/list` enumerates over Camera2 (id, facing, RAW
+capability, focal lengths, sensor size, pixels) and `/permission?request=1` gets the system
+dialog out of the way before the viewfinder opens. wuffle v3's photo-per-station runs on plain
+`getUserMedia` → canvas → JPEG (asking for a 2560×1920 ideal frame; the S24+ gives 1920×2560,
+~170 KB), published to Pictures beside the log. **Level 2 — this doc's CameraX/RAW plugin with
+the transparent-WebView composite — is NOT built.** *Drivers: wuffle v3 (an outcrop photo
 stapled to a measurement); a dedicated RAW/manual camera app.*
 
 ## Two levels — know which you need

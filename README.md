@@ -93,8 +93,9 @@ factory list), drops your artifact at `src/main/assets/artifact.html`, and adds 
 `settings.gradle.kts`. Re-running it on the same name regenerates those files in place and keeps
 your artifact unless you pass `--artifact` again. Available plugins: `sensor`, `share`,
 `attest`, `intake` (with `--intake <mime,mime>` to become a share target for those types),
-`gnss`; none is also fine. Permissions follow the plugins — the stamped manifest requests nothing
-itself, and `gnss` is the one that brings a dangerous permission (FINE location) with it.
+`gnss`, `camera`; none is also fine. Permissions follow the plugins — the stamped manifest
+requests nothing itself; `gnss` (FINE location) and `camera` (CAMERA) are the ones that bring a
+dangerous permission with them.
 
 Your artifact doesn't need to know about the shell. If it wants native features, it imports
 `./lead-acid.js` (served next to it by core) and feature-detects `shell.present`; the same file
@@ -119,10 +120,11 @@ one-line change. Rebuild, re-run the bench on a device of that version, ship.
 | `plugin-share` | library | the system share sheet — owns the FileProvider + `file_paths.xml` |
 | `plugin-attest` | library | hardware-backed signing in the AndroidKeyStore (StrongBox where available) |
 | `plugin-gnss` | library | raw GNSS off the platform `LocationManager` (no Play Services): location / satellite status / raw measurements / NMEA as push streams. **The first permission-bearing plugin** — `ACCESS_FINE_LOCATION` is declared by its manifest, asked for at first stream-open; an instrument has it iff it depends on this module |
+| `plugin-camera` | library | level 1 of the camera design: brings the `CAMERA` permission (so the shell grants `getUserMedia` — preview + JPEG capture in plain web code) and enumerates the cameras over Camera2. The CameraX/RAW tier (native preview behind a transparent WebView, DNG) is a separate project |
 | `plugin-intake` | library | the share sheet as INPUT — files/text shared or opened into the instrument reach the artifact as a push stream (the instrument's manifest says which mime types; `pack-instrument.mjs … --intake text/csv`) |
 | `app` | application | the **dev / kitchen-sink harness**: core + every plugin, hosts any artifact (`--es artifact micro.html` on debug builds), carries the bench page |
 | `template` | application | the **copy-me instrument**: core + one plugin + a placeholder artifact — the five-minute starting point |
-| `wuffle` | application | the geological compass as an instrument — core + sensor (the fused compass) + attest (signed logs) + intake (a shared log reloads) + gnss (every measurement carries its position); its `artifact.html` syncs from the monorepo's built `wuffle.html` (`gradle.properties` → `leadacid.artifactsDir`) |
+| `wuffle` | application | the geological compass as an instrument — core + sensor (the fused compass) + attest (signed logs) + intake (a shared log reloads) + gnss (every measurement carries its position) + camera (an outcrop photo per station); its `artifact.html` syncs from the monorepo's built `wuffle.html` (`gradle.properties` → `leadacid.artifactsDir`) |
 
 An instrument is the whole wiring:
 

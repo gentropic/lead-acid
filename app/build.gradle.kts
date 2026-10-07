@@ -40,4 +40,5 @@ dependencies {
     implementation(project(":plugin-attest"))
     implementation(project(":plugin-intake"))
     implementation(project(":plugin-gnss"))
+    implementation(project(":plugin-camera"))
 }
