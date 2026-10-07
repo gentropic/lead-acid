@@ -38,3 +38,4 @@ app/src/main/assets/*.html
 # leadacid.artifactsDir) — never commit the copy.
 wuffle/src/main/assets/
 gnsslog/src/main/assets/
+micro/src/main/assets/

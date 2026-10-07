@@ -195,12 +195,32 @@ the request that opens its stream — `intake` delivers its queue at once — so
 messages can reach the page before `stream()` has learned the id. `lead-acid.js` holds messages
 for an unknown id (bounded) and replays them once the id registers, after the caller's `.on()`
 calls. (2) `onPause` closes every push stream and now TELLS the page (a `close` message per
-stream), so a page's `onClose` is how it reopens on resume — wuffle reopens its fused and intake
-streams that way. A share that reaches a RUNNING singleTask instrument pauses it briefly first,
-which is exactly when that matters. (3) Shared URIs are registered as fs tokens at DELIVERY
+stream), so a page's `onClose` is how it reopens on resume — wuffle reopens its fused and gnss
+streams that way, by choice (a sensor stream is a battery decision the page owns). **`intake` is
+different and `lead-acid.js` reopens it ITSELF**, unconditionally: a share that reaches a RUNNING
+singleTask instrument pauses it briefly first (onPause → onNewIntent → onResume), the plugin
+keeps the item queued until a stream is open, and a page that didn't reopen would leave the
+shared file in that queue forever (found on device with micro: the first intent opened a 17 MB
+model, the second sat in `intake/pending`). `shell.intake()` returns `{ on, close }` and never a
+close notification — the close is the shim's business. The bench's `__bench.pause()` reproduces
+the shell's onPause for a desktop guard (`test/micro-shell-smoke.mjs` §3). (3) Shared URIs are registered as fs tokens at DELIVERY
 time (when the page asks), never at intent time: a share that launches the instrument arrives
 in onCreate, before any page exists, and the page-generation lifecycle would release the token
 on the first page start.
+
+**Posture A — a Sealed artifact inside the shell (`shellConnect`, 2026-10-07, micro).** A Sealed
+artifact ships `connect-src 'none'`, which also forbids `fetch('/native/…')` — the whole bridge.
+Rather than ship a second, unsealed build of the same file, the instrument's activity opts in with
+`override val shellConnect = true` and the shell rewrites that ONE directive to `connect-src
+'self'` in the HTML it serves (a `PathHandler` wrapper over the asset loader; the file on disk is
+untouched, its seal still verifies). The bound holds because the app declares no INTERNET
+permission: `'self'` is `https://appassets.androidplatform.net`, and the only thing answering
+there is the shell. Micro is the driver: `fileBlob(token, size, name)` in `lead-acid.js` makes an
+fs token Blob-shaped (slice / arrayBuffer / text / stream over ranged `/native/fs/<token>` reads,
+4 MiB chunks), an intake item carries `.blob`, and micro's `openBlob` takes it exactly as a dropped
+File — the 17 MB block model opens never-resident, 324 k blocks in 3.8 s on the S24+ from a cold
+VIEW intent. The desktop guard is `test/micro-shell-smoke.mjs` (the built file must STILL say
+`connect-src 'none'`: opening it is the shell's serve-time act, never the artifact's).
 
 Feature-detection means the same artifact runs on desktop (where `shell.present` is false and native features simply don't appear) and in lead-acid. One file, two homes. `shell.native()` hides the §4.3 body sidecar entirely — callers pass `{body}` as if fetch carried it. For GCU artifacts specifically, `lead-acid.js` also offers the `fs` plugin as a **`@gcu/vfs` backend adapter** (`shell.fsBackend(Backend)` — a `readRange`/`rangeReadable`-true subclass), so Works/notebook artifacts mount phone storage with zero new concepts.
 

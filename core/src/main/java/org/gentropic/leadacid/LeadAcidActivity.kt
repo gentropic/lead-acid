@@ -67,6 +67,17 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
     /** The artifact to load. Debug builds honor `--es artifact <name>.html`. */
     open fun artifactName(): String = "artifact.html"
 
+    /**
+     * POSTURE A (SPEC §4.5): a Sealed artifact declares `connect-src 'none'`, which
+     * makes the page refuse even `fetch('/native/…')` before the interceptor sees it.
+     * An instrument that opts in has the shell rewrite that ONE directive to
+     * `connect-src 'self'` as the artifact is SERVED — the virtual origin is the only
+     * origin that exists here, and the app has no INTERNET permission, so "nothing
+     * leaves the device" stays enforced by the OS. The file on disk is untouched;
+     * the shell's capability declaration says it does this.
+     */
+    open val shellConnect: Boolean = false
+
     protected lateinit var webView: WebView
     private val registry = HashMap<String, Plugin>()
 
@@ -203,9 +214,10 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
             }
         })
 
+        val assets = WebViewAssetLoader.AssetsPathHandler(this)
         val assetLoader = WebViewAssetLoader.Builder()
             .setDomain(ORIGIN)
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/assets/", if (shellConnect) CspOpeningHandler(assets) else assets)
             .build()
 
         webView = WebView(this)
@@ -378,6 +390,17 @@ open class LeadAcidActivity : ComponentActivity(), PluginHost {
         val artifact = (if (debuggable) intent.getStringExtra("artifact") else null)
             ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]+")) } ?: artifactName()
         webView.loadUrl("https://$ORIGIN/assets/$artifact")
+    }
+
+    /** Serves .html assets with `connect-src 'none'` opened to `'self'` (see [shellConnect]). */
+    private class CspOpeningHandler(private val inner: WebViewAssetLoader.PathHandler) : WebViewAssetLoader.PathHandler {
+        override fun handle(path: String): WebResourceResponse? {
+            val r = inner.handle(path) ?: return null
+            if (!path.endsWith(".html", ignoreCase = true)) return r
+            val html = r.data?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return r
+            val opened = html.replaceFirst("connect-src 'none'", "connect-src 'self'")
+            return WebResourceResponse("text/html", "utf-8", opened.byteInputStream(Charsets.UTF_8))
+        }
     }
 
     private fun register(plugin: Plugin) {

@@ -237,5 +237,12 @@
     intakeQueue.splice(0).forEach(function (it) { push(intakeStream, 'item', JSON.stringify(it)); });
   }
   console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera.');
-  window.__bench = { fixtures: fx, push: push, files: fx.files, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
+  // pause(): what the real shell's onPause does — stop + close EVERY open push
+  // stream and tell the page (a share reaching a running singleTask instrument
+  // pauses it first; the intake stream must come back by itself, SPEC §4.5).
+  function pause() {
+    streams.forEach(function (s, id) { s.stop(); pushClose(id); });
+    streams.clear();
+  }
+  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
 })();

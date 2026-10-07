@@ -67,6 +67,7 @@ gradlew.bat assembleDebug      # every module; the apps land at
                                #   template/build/outputs/apk/debug/template-debug.apk
                                #   wuffle/build/outputs/apk/debug/wuffle-debug.apk
                                #   gnsslog/build/outputs/apk/debug/gnsslog-debug.apk
+                               #   micro/build/outputs/apk/debug/micro-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 gradlew.bat :wuffle:assembleRelease :wuffle:bundleRelease   # signed iff keystore.properties — docs/signing.md
 ```
@@ -125,6 +126,7 @@ one-line change. Rebuild, re-run the bench on a device of that version, ship.
 | `plugin-intake` | library | the share sheet as INPUT — files/text shared or opened into the instrument reach the artifact as a push stream (the instrument's manifest says which mime types; `pack-instrument.mjs … --intake text/csv`) |
 | `app` | application | the **dev / kitchen-sink harness**: core + every plugin, hosts any artifact (`--es artifact micro.html` on debug builds), carries the bench page |
 | `template` | application | the **copy-me instrument**: core + one plugin + a placeholder artifact — the five-minute starting point |
+| `micro` | application | the point-cloud / block-model viewer as an instrument (its REVIEW MODE is the phone layout) — core + intake; `artifact.html` syncs from the monorepo's built `micro.html`. **Posture A:** micro is Sealed (`connect-src 'none'`), and `MicroActivity` opts into `shellConnect` so the shell opens that one directive to `'self'` at serve time — the app has no INTERNET permission, so the only reachable origin is the shell itself. "Open with micro" a CSV / `.dm` / Parquet: 324 k blocks through mmap'd ranged reads in 3.8 s on the S24+ |
 | `gnsslog` | application | the raw GNSS logger as an instrument — core + gnss (the streams + the foreground-service capture) + share; its `artifact.html` syncs from the monorepo's built `gnsslog.html`. The gnss plugin's named driver |
 | `wuffle` | application | the geological compass as an instrument — core + sensor (the fused compass) + attest (signed logs) + intake (a shared log reloads) + gnss (every measurement carries its position) + camera (an outcrop photo per station); its `artifact.html` syncs from the monorepo's built `wuffle.html` (`gradle.properties` → `leadacid.artifactsDir`) |
 

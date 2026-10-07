@@ -43,6 +43,7 @@ export const shell = (() => {
           if (!m || !m.s) return;
           const st = pushStreams.get(m.s);
           if (!st) {
+            if (m.close) return;   // a close for a stream we've already dropped — nothing to hold
             const q = early.get(m.s) || []; if (q.length < 256) q.push(m); early.set(m.s, q);
             return;
           }
@@ -161,6 +162,44 @@ export const shell = (() => {
     async keyinfo() { return (await native('attest/keyinfo')).json(); },
   };
 
+  // A Blob-SHAPED view of an fs token (size · slice · arrayBuffer · text ·
+  // stream), so code that takes a File — micro's openBlob, a parser — reads the
+  // shell's mmap'd file in ranges without knowing about the bridge. Slices are
+  // lazy; reads go in 4 MiB requests. `name` rides along for dispatch-by-extension.
+  const BLOB_CHUNK = 4 * 1024 * 1024;
+  function fileBlob(token, size, name = token, start = 0, end = size) {
+    const url = 'fs/' + encodeURIComponent(token);
+    const read = async (a, b) => {
+      const r = await native(url, { headers: { Range: `bytes=${a}-${b - 1}` } });
+      if (!r.ok && r.status !== 206) throw new Error('read failed: ' + r.status);
+      return new Uint8Array(await r.arrayBuffer());
+    };
+    const n = end - start;
+    return {
+      name, size: n, type: '', lastModified: 0,
+      slice(a = 0, b = n) {
+        const s = Math.min(n, Math.max(0, a < 0 ? n + a : a)), e = Math.min(n, Math.max(s, b < 0 ? n + b : b));
+        return fileBlob(token, size, name, start + s, start + e);
+      },
+      async arrayBuffer() {
+        if (n <= 0) return new ArrayBuffer(0);
+        const out = new Uint8Array(n); let at = 0;
+        while (at < n) { const take = Math.min(BLOB_CHUNK, n - at); const bytes = await read(start + at, start + at + take); if (!bytes.length) throw new Error('short read'); out.set(bytes, at); at += bytes.length; }
+        return out.buffer;
+      },
+      async text() { return new TextDecoder().decode(await this.arrayBuffer()); },
+      stream() {
+        let at = 0;
+        return new ReadableStream({ async pull(ctrl) {
+          if (at >= n) { ctrl.close(); return; }
+          const take = Math.min(2 * 1024 * 1024, n - at); const bytes = await read(start + at, start + at + take);
+          if (!bytes.length) { ctrl.close(); return; }
+          at += bytes.length; ctrl.enqueue(bytes);
+        } });
+      },
+    };
+  }
+
   // Registered fs tokens (SAF picks + built-ins): [{token, size}]
   async function files() {
     try { return await (await native('fs/list')).json(); }
@@ -241,15 +280,38 @@ export const shell = (() => {
 
   // Items shared TO the instrument (SPEC §5.1 intake, share's inbound twin).
   // A file arrives as an fs token with a ready `source` (readRange /
-  // arrayBuffer); text as text. Whatever was queued before the page asked —
-  // the share that launched the app — arrives first.
+  // arrayBuffer) and a Blob-shaped `blob`; text as text. Whatever was queued
+  // before the page asked — the share that launched the app — arrives first.
+  //
+  // SELF-REOPENING (found on device 2026-10-07): a share that reaches a RUNNING
+  // singleTask instrument pauses it first (onPause → onNewIntent → onResume),
+  // and onPause closes every push stream. The plugin keeps the item queued
+  // until a stream is open — so unlike a sensor stream (which a page reopens
+  // itself, by choice, for battery), intake reopens here, unconditionally: the
+  // queue is durable and dropping it is the only way to lose a shared file.
+  // Returns { on, close } — never a close notification: a close is our business.
   async function intake(onItem) {
-    const s = await stream('intake/stream');
-    s.on('item', (d) => {
-      if (d.kind === 'file') d.source = fileSource(d.token, d.size);
-      onItem(d);
-    });
-    return s;
+    let closed = false, live = null;
+    const extra = new Map();   // event → Set<cb>, re-attached on every reopen
+    const wire = (s) => {
+      live = s;
+      s.on('item', (d) => {
+        if (d.kind === 'file') { d.source = fileSource(d.token, d.size); d.blob = fileBlob(d.token, d.size, d.name); }
+        onItem(d);
+      });
+      for (const [ev, cbs] of extra) for (const cb of cbs) s.on(ev, cb);
+      s.onClose(() => {
+        live = null;
+        if (closed) return;
+        setTimeout(() => { if (!closed) stream('intake/stream').then(wire).catch(() => {}); }, 0);
+      });
+    };
+    wire(await stream('intake/stream'));
+    const api = {
+      on(event, cb) { let s = extra.get(event); if (!s) extra.set(event, s = new Set()); s.add(cb); if (live) live.on(event, cb); return api; },
+      close() { closed = true; if (live) live.close(); live = null; },
+    };
+    return api;
   }
 
   // Raw GNSS off the platform LocationManager (SPEC §5.1 gnss). Each opens a
@@ -321,7 +383,7 @@ export const shell = (() => {
     },
   };
 
-  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera };
+  return { present, native, stream, version, keepAwake, publish, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera };
 })();
 
 /**
