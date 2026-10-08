@@ -48,6 +48,12 @@ class SensorPlugin(
         "magnetic_uncal" to HwSensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, // raw, for calibration state
         "accel" to HwSensor.TYPE_ACCELEROMETER,
         "gravity" to HwSensor.TYPE_GRAVITY,
+        // ep's @sensor sources (SPEC-pocket §4.3): pressure has no web API at
+        // all, gyro and light do but only behind flags — the shell is the
+        // honest path for all three. One-line additions, no permission.
+        "gyro" to HwSensor.TYPE_GYROSCOPE,
+        "pressure" to HwSensor.TYPE_PRESSURE,
+        "light" to HwSensor.TYPE_LIGHT,
     )
     private val nameByType = byName.entries.associate { (k, v) -> v to k }
 
