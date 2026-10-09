@@ -41,4 +41,5 @@ dependencies {
     implementation(project(":plugin-intake"))
     implementation(project(":plugin-gnss"))
     implementation(project(":plugin-camera"))
+    implementation(project(":plugin-intent"))
 }

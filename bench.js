@@ -78,6 +78,58 @@
   // ── mock handlers. (req = {query, headers}, body = Uint8Array|null) ────────
   var streams = new Map(); var streamSeq = 0;
   var published = [], shared = [];                      // what the page handed out (the smokes read these)
+  // intent: fx.intent = { '<name>': canHandle } (default: everything handled); every
+  // send is validated like the shell does (type / range / length / unknown field)
+  // and recorded in `intents` — a smoke presses the hand-off button on the desktop
+  // and asserts the call the phone would have made.
+  var intents = [];
+  var INTENT_SCHEMA = {
+    'calendar.insert': { title: ['str', 200, 1], begin: ['when', 0, 1], end: ['when'], allDay: ['bool'], description: ['str', 2000], location: ['str', 200] },
+    'clock.timer': { seconds: ['int', 1, 86400, 1], message: ['str', 100], skipUi: ['bool'] },
+    'clock.alarm': { hour: ['int', 0, 23, 1], minutes: ['int', 0, 59, 1], message: ['str', 100], days: ['days'], skipUi: ['bool'] },
+    'map.view': { lat: ['num', -90, 90, 1], lon: ['num', -180, 180, 1], label: ['str', 100], zoom: ['int', 1, 21] },
+    dial: { number: ['phone', 32, 1] },
+    sendto: { kind: ['enum', ['sms', 'mail'], 1], to: ['str', 200, 1], subject: ['str', 200], body: ['str', 4000] },
+    'contact.insert': { name: ['str', 200, 1], phone: ['phone', 32], email: ['str', 200], company: ['str', 200], note: ['str', 1000] },
+  };
+  var INTENT_PROBES = ['calendar.insert', 'clock.timer', 'clock.alarm', 'map.view', 'dial', 'sendto.sms', 'sendto.mail', 'contact.insert'];
+  function intentCan(name) { var m = fx.intent || {}; return !(name in m) || m[name] !== false; }
+  function intentValidate(name, body) {
+    var schema = INTENT_SCHEMA[name], out = {};
+    for (var k in body) {
+      var f = schema[k];
+      if (!f) return { field: k, error: 'unknown field' };
+      var v = body[k], t = f[0], bad = false;
+      if (v === null || v === undefined) continue;
+      if (t === 'str') { bad = typeof v !== 'string' || v.trim().length > f[1] || (f[2] && !v.trim()); if (!bad) v = v.trim(); }
+      else if (t === 'int') { bad = typeof v !== 'number' || v !== Math.floor(v) || v < f[1] || v > f[2]; }
+      else if (t === 'num') { bad = typeof v !== 'number' || isNaN(v) || v < f[1] || v > f[2]; }
+      else if (t === 'bool') { bad = typeof v !== 'boolean'; }
+      else if (t === 'when') { bad = typeof v !== 'string' || isNaN(Date.parse(v)); }
+      else if (t === 'days') { bad = !Array.isArray(v) || !v.length || v.some(function (d) { return !(d >= 1 && d <= 7 && d === Math.floor(d)); }); }
+      else if (t === 'enum') { bad = f[1].indexOf(v) < 0; }
+      else if (t === 'phone') { bad = typeof v !== 'string' || !/^[0-9+ ()-]{1,32}$/.test(v.trim()); }
+      if (bad) return { field: k, error: 'invalid ' + k };
+      out[k] = v;
+    }
+    for (var r in schema) if (schema[r][schema[r].length - 1] === 1 && schema[r].length > 1 && !(r in out)) {
+      // the trailing 1 marks a required field (str/int/num/phone/enum/when carry it last)
+      if (schema[r][0] !== 'bool' && schema[r][0] !== 'days') return { field: r, error: 'required' };
+    }
+    return { fields: out };
+  }
+  function intentSend(name, body) {
+    if (!INTENT_SCHEMA[name]) return jsonResp({ error: 'Not Found', detail: 'intent/' + name }, 404);
+    var fields = {};
+    try { fields = body && body.length ? JSON.parse(new TextDecoder().decode(body)) : {}; } catch (e) { return jsonResp({ error: 'body is not a JSON object', field: '' }, 400); }
+    var v = intentValidate(name, fields);
+    if (v.error) return jsonResp({ error: v.error, field: v.field }, 400);
+    var probe = name === 'sendto' ? 'sendto.' + v.fields.kind : name;
+    if (!intentCan(probe)) return jsonResp({ error: 'no app handles this', capability: 'intent.' + name }, 503);
+    intents.push({ name: name, fields: v.fields, at: Date.now() });
+    console.log('[bench] intent/' + name, JSON.stringify(v.fields));
+    return jsonResp({ launched: true });
+  }
   // tree: fx.tree = { name, children: { <name>: {kind:'directory',children} | {kind:'file',bytes,mtime} } }
   var treeRoot = fx.tree || { name: 'bench-folder', children: {} }; treeRoot.kind = 'directory'; treeRoot.children = treeRoot.children || {};
   var treeWriters = {}, tSeq = 0, pubWriters = {}, pubSeq = 0;
@@ -135,6 +187,7 @@
     'fs/publish/abort': function (req) { delete pubWriters[req.query.w]; return jsonResp({ ok: true }); },
     // ── tree: an in-memory folder the mocked picker hands out (fx.tree) ──
     'tree/info': function () { return jsonResp({ ok: true }); },
+    'intent/list': function () { var o = {}; INTENT_PROBES.forEach(function (n) { o[n] = intentCan(n); }); return jsonResp(o); },
     'tree/pick': function () { return fx.treePick === false ? jsonResp({ cancelled: true }) : jsonResp(treeRootJson()); },
     'tree/restore': function (req) { return req.query.uri === treeUri() ? jsonResp(treeRootJson()) : jsonResp({ error: 'Not Found', detail: 'permission lost — pick the folder again' }, 404); },
     'tree/list': function (req) {
@@ -297,6 +350,8 @@
       if (seg[0] === 'fs' && seg[1] && !routes['fs/' + seg[1]] && !routes[pathAndSub] && seg[1] !== 'echo') {
         return fsRead(decodeURIComponent(seg[1]), headers['Range'] || headers['range']);
       }
+      // dynamic intent send: intent/<name> (list is a fixed route above)
+      if (seg[0] === 'intent' && seg[1] && pathAndSub !== 'intent/list') return intentSend(decodeURIComponent(seg[1]), body);
       var h = routes[pathAndSub];
       if (!h) return jsonResp({ error: 'Not Found', detail: pathAndSub }, 404);
       return Promise.resolve(h(req, body));
@@ -316,7 +371,7 @@
     if (!intakeStream) return;
     intakeQueue.splice(0).forEach(function (it) { push(intakeStream, 'item', JSON.stringify(it)); });
   }
-  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera, tree.');
+  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera, tree, intent.');
   // pause(): what the real shell's onPause does — stop + close EVERY open push
   // stream and tell the page (a share reaching a running singleTask instrument
   // pauses it first; the intake stream must come back by itself, SPEC §4.5).
@@ -324,5 +379,5 @@
     streams.forEach(function (s, id) { s.stop(); pushClose(id); });
     streams.clear();
   }
-  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, published: published, shared: shared, tree: treeRoot, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
+  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, published: published, shared: shared, intents: intents, tree: treeRoot, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
 })();

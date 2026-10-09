@@ -578,7 +578,29 @@ export const shell = (() => {
     };
   })();
 
-  return { present, native, stream, version, keepAwake, publish, publishStream, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera, tree };
+  // Allowlisted hand-offs to other apps (SPEC §5.1 `intent`): the page names ONE
+  // of a fixed list and gives typed fields; the shell builds the Android intent
+  // and starts the other app, where the person confirms. No result comes back —
+  // `launched` is all the page learns. A failure throws an Error carrying the
+  // shell's verdict: { status, error, field? (400), capability? (503) }.
+  const intent = {
+    // { 'calendar.insert': true, 'clock.timer': true, 'sendto.sms': false, … } — hide the button, don't discover it on tap
+    async list() {
+      const r = await native('intent/list');
+      if (!r.ok) throw Object.assign(new Error('intent/list → ' + r.status), { status: r.status });
+      return r.json();
+    },
+    async send(name, fields) {
+      const r = await native('intent/' + encodeURIComponent(name), {
+        method: 'POST', body: new TextEncoder().encode(JSON.stringify(fields || {})),
+      });
+      if (r.ok) return r.json();
+      const d = await r.json().catch(() => ({}));
+      throw Object.assign(new Error(d.error || (name + ' → ' + r.status)), { status: r.status, error: d.error, field: d.field, capability: d.capability, detail: d.detail });
+    },
+  };
+
+  return { present, native, stream, version, keepAwake, publish, publishStream, share, shareText, attest, files, fileSource, fileBlob, fsBackend, orientation, orientationFromRotationVector, intake, gnss, camera, tree, intent };
 })();
 
 /**

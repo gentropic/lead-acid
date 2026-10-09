@@ -6,6 +6,7 @@ import org.gentropic.leadacid.attest.Attest
 import org.gentropic.leadacid.camera.Camera
 import org.gentropic.leadacid.gnss.Gnss
 import org.gentropic.leadacid.intake.Intake
+import org.gentropic.leadacid.intent.IntentHandoff
 import org.gentropic.leadacid.sensor.Sensor
 import org.gentropic.leadacid.share.Share
 import java.io.File
@@ -22,7 +23,7 @@ class DevActivity : LeadAcidActivity() {
         const val TEST_FILE_SIZE = 8L * 1024 * 1024
     }
 
-    override val plugins: List<PluginFactory> = listOf(Sensor, Share, Attest, Intake, Gnss, Camera)
+    override val plugins: List<PluginFactory> = listOf(Sensor, Share, Attest, Intake, Gnss, Camera, IntentHandoff)
 
     override fun builtinFiles(): Map<String, File> {
         val f = File(filesDir, "spike0.bin").also(::ensureTestFile)
