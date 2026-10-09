@@ -125,6 +125,8 @@ class SpeechPlugin(private val host: PluginHost) : Plugin {
             sb.append(""","language":{"tag":${BridgeResponse.jsonStr(lang)},"installed":${exact != null},"usable":${uses != null}${if (uses != null && exact == null) ""","uses":${BridgeResponse.jsonStr(uses)}""" else ""}}""")
             sb.append(""","installed":[${installed.joinToString(",") { BridgeResponse.jsonStr(it) }}]""")
             sb.append(""","downloadable":[${downloadable.joinToString(",") { BridgeResponse.jsonStr(it) }}]""")
+            // packs the recognizer is fetching right now (installed once it finishes)
+            sb.append(""","pending":[${s.pendingOnDeviceLanguages.joinToString(",") { BridgeResponse.jsonStr(it) }}]""")
         } else {
             sb.append(""","language":{"tag":${BridgeResponse.jsonStr(lang)},"installed":null}""")
         }
