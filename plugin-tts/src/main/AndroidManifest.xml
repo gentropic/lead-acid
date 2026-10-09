@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  tts plugin: no permission. The query lets TextToSpeech bind the device's engine on
+  API 30+. No INTERNET; the plugin only ever selects voices that do not need the network.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+    </queries>
+</manifest>

@@ -77,7 +77,9 @@
 
   // ── mock handlers. (req = {query, headers}, body = Uint8Array|null) ────────
   var streams = new Map(); var streamSeq = 0;
-  var published = [], shared = [];                      // what the page handed out (the smokes read these)
+  var published = [], shared = [];
+  var speechStream = null, speechLog = [], spoken = [];
+  var BENCH_VOICES = [{ name: 'en-us-x-bench-local', locale: 'en-US', quality: 400, latency: 200 }, { name: 'pt-br-x-bench-local', locale: 'pt-BR', quality: 400, latency: 200 }];                      // what the page handed out (the smokes read these)
   // intent: fx.intent = { '<name>': canHandle } (default: everything handled); every
   // send is validated like the shell does (type / range / length / unknown field)
   // and recorded in `intents` — a smoke presses the hand-off button on the desktop
@@ -187,6 +189,41 @@
     'fs/publish/abort': function (req) { delete pubWriters[req.query.w]; return jsonResp({ ok: true }); },
     // ── tree: an in-memory folder the mocked picker hands out (fx.tree) ──
     'tree/info': function () { return jsonResp({ ok: true }); },
+    // speech: fx.speech = { onDevice, installed: [...], downloadable: [...], granted, script: [[ms, event, data], …] }
+    'speech/support': function (req) {
+      var sp = fx.speech || {}, lang = req.query.lang || 'en-US', inst = sp.installed || ['en-US'];
+      return jsonResp({ onDevice: sp.onDevice !== false, sdk: 34, language: { tag: lang, installed: inst.indexOf(lang) >= 0 }, installed: inst, downloadable: sp.downloadable || [] });
+    },
+    'speech/permission': function () { var sp = fx.speech || {}; return jsonResp({ granted: sp.granted !== false, canRequest: true }); },
+    'speech/stream': function (req) {
+      var sp = fx.speech || {}, lang = req.query.lang || 'en-US', inst = sp.installed || ['en-US'];
+      if (sp.granted === false) return jsonResp({ error: 'permission', detail: 'RECORD_AUDIO denied', canRequest: true }, 403);
+      if (sp.onDevice === false || inst.indexOf(lang) < 0) return jsonResp({ error: 'no on-device language pack for ' + lang, capability: 'speech.ondevice' }, 503);
+      if (speechStream) return jsonResp({ error: 'busy', holder: speechStream }, 409);
+      var id = 'bg' + (++streamSeq), bias = (req.query.bias || '').split(',').filter(Boolean);
+      speechStream = id; speechLog.push({ lang: lang, bias: bias });
+      var script = sp.script || [[300, 'partial', { text: 'density' }], [300, 'partial', { text: 'density of' }], [400, 'result', { alternatives: [{ text: 'density of chalcopyrite', confidence: 0.91 }] }]];
+      var timers = [], t = 0;
+      function finish() { push(id, 'end', '{}'); speechStream = null; streams.delete(id); pushClose(id); }
+      timers.push(setTimeout(function () { push(id, 'ready', JSON.stringify({ lang: lang, onDevice: true, bias: bias.length })); }, 0));
+      script.forEach(function (row) { t += row[0]; timers.push(setTimeout(function () { push(id, row[1], JSON.stringify(row[2])); if (row[1] === 'result' || row[1] === 'error') finish(); }, t)); });
+      streams.set(id, { stop: function () { timers.forEach(clearTimeout); if (speechStream === id) speechStream = null; } });
+      return jsonResp({ stream: id });
+    },
+    'speech/stop': function () { return jsonResp({ stopped: !!speechStream }); },
+    // tts: fx.tts = { voices: [{name, locale, quality, latency}] } — every speak lands in __bench.spoken
+    'tts/support': function () { var v = (fx.tts && fx.tts.voices) || BENCH_VOICES; return jsonResp({ available: true, engine: 'bench', offlineVoices: v.length }); },
+    'tts/voices': function (req) { var v = (fx.tts && fx.tts.voices) || BENCH_VOICES, l = req.query.lang; return jsonResp(v.filter(function (x) { return !l || x.locale.toLowerCase().indexOf(l.toLowerCase().split('-')[0]) === 0; })); },
+    'tts/speak': function (req, body) {
+      var text = (req.query.text || (body ? new TextDecoder().decode(body) : '')).trim();
+      if (!text) return jsonResp({ error: 'nothing to say', field: 'text' }, 400);
+      var v = (fx.tts && fx.tts.voices) || BENCH_VOICES, lang = req.query.lang || 'en-US';
+      var voice = req.query.voice ? v.filter(function (x) { return x.name === req.query.voice; })[0] : v.filter(function (x) { return x.locale.toLowerCase().indexOf(lang.toLowerCase().split('-')[0]) === 0; })[0];
+      if (!voice) return jsonResp({ error: 'no offline voice for ' + lang, capability: 'tts.offline' }, 503);
+      spoken.push({ text: text, lang: lang, voice: voice.name, rate: req.query.rate ? +req.query.rate : null });
+      return new Promise(function (res) { setTimeout(function () { res(jsonResp({ done: true, ms: 40 * text.length, voice: voice.name })); }, 30); });
+    },
+    'tts/stop': function () { return jsonResp({ stopped: true }); },
     'intent/list': function () { var o = {}; INTENT_PROBES.forEach(function (n) { o[n] = intentCan(n); }); return jsonResp(o); },
     'tree/pick': function () { return fx.treePick === false ? jsonResp({ cancelled: true }) : jsonResp(treeRootJson()); },
     'tree/restore': function (req) { return req.query.uri === treeUri() ? jsonResp(treeRootJson()) : jsonResp({ error: 'Not Found', detail: 'permission lost — pick the folder again' }, 404); },
@@ -371,7 +408,7 @@
     if (!intakeStream) return;
     intakeQueue.splice(0).forEach(function (it) { push(intakeStream, 'item', JSON.stringify(it)); });
   }
-  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera, tree, intent.');
+  console.log('[bench] active — /native mocked, shell.present=true. Plugins: shell, fs, sensor, share, attest, intake, gnss, camera, tree, intent, speech, tts.');
   // pause(): what the real shell's onPause does — stop + close EVERY open push
   // stream and tell the page (a share reaching a running singleTask instrument
   // pauses it first; the intake stream must come back by itself, SPEC §4.5).
@@ -379,5 +416,5 @@
     streams.forEach(function (s, id) { s.stop(); pushClose(id); });
     streams.clear();
   }
-  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, published: published, shared: shared, intents: intents, tree: treeRoot, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
+  window.__bench = { fixtures: fx, push: push, files: fx.files, pause: pause, published: published, shared: shared, intents: intents, speech: speechLog, spoken: spoken, tree: treeRoot, intake: function (items) { intakeQueue.push.apply(intakeQueue, items); flushIntake(); } };
 })();

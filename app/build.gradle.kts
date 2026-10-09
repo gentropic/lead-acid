@@ -42,4 +42,6 @@ dependencies {
     implementation(project(":plugin-gnss"))
     implementation(project(":plugin-camera"))
     implementation(project(":plugin-intent"))
+    implementation(project(":plugin-speech"))
+    implementation(project(":plugin-tts"))
 }

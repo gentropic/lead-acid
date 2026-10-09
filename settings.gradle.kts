@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "lead-acid"
-include(":core", ":plugin-sensor", ":plugin-share", ":plugin-attest", ":plugin-intake", ":plugin-gnss", ":plugin-camera", ":plugin-tree", ":plugin-intent", ":app", ":template", ":wuffle", ":gnsslog", ":micro", ":lamina", ":ep")
+include(":core", ":plugin-sensor", ":plugin-share", ":plugin-attest", ":plugin-intake", ":plugin-gnss", ":plugin-camera", ":plugin-tree", ":plugin-intent", ":plugin-speech", ":plugin-tts", ":app", ":template", ":wuffle", ":gnsslog", ":micro", ":lamina", ":ep")

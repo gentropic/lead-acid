@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  speech plugin: RECORD_AUDIO (dangerous, asked inline on the first stream) and the
+  package-visibility query without which isOnDeviceRecognitionAvailable cannot see
+  the recognizer service on API 30+. No INTERNET: the on-device recognizer is the
+  device's own service, on-device by contract; this plugin never uses the networked one.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <queries>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+    </queries>
+</manifest>
