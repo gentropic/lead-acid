@@ -2,7 +2,7 @@
 // pack-instrument — the five-minute recipe as one command (PLAN M2 Phase 3).
 //
 //   node pack-instrument.mjs <module> --id <applicationId> --label "<name>"
-//                            [--artifact <built.html>] [--plugins sensor,share,attest,intake,gnss,camera,intent]
+//                            [--artifact <built.html>] [--plugins <name,name>]
 //                            [--intake text/csv,text/plain]   (mime types the instrument takes in)
 //
 // Stamps a new instrument module out of template/: namespace + applicationId,
@@ -20,16 +20,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = join(ROOT, 'template');
 
-// ── plugin catalog: name → { module, import, factory } ──────────────────────
-const PLUGINS = {
-  sensor: { module: ':plugin-sensor', imp: 'org.gentropic.leadacid.sensor.Sensor', factory: 'Sensor' },
-  share: { module: ':plugin-share', imp: 'org.gentropic.leadacid.share.Share', factory: 'Share' },
-  attest: { module: ':plugin-attest', imp: 'org.gentropic.leadacid.attest.Attest', factory: 'Attest' },
-  intake: { module: ':plugin-intake', imp: 'org.gentropic.leadacid.intake.Intake', factory: 'Intake' },
-  gnss: { module: ':plugin-gnss', imp: 'org.gentropic.leadacid.gnss.Gnss', factory: 'Gnss' },
-  camera: { module: ':plugin-camera', imp: 'org.gentropic.leadacid.camera.Camera', factory: 'Camera' },
-  intent: { module: ':plugin-intent', imp: 'org.gentropic.leadacid.intent.IntentHandoff', factory: 'IntentHandoff' },
-};
+// the plugin catalog is shared with the lead-acid command (cli.mjs)
+import { PLUGINS } from './plugins.mjs';
 
 // ── args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -41,7 +33,7 @@ for (let i = 0; i < args.length; i++) {
 }
 const name = positional[0];
 const usage = () => {
-  console.error('usage: node pack-instrument.mjs <module> --id <applicationId> --label "<name>" [--artifact <built.html>] [--plugins sensor,share,attest,intake,gnss,camera,intent] [--intake <mime,mime>]');
+  console.error('usage: node pack-instrument.mjs <module> --id <applicationId> --label "<name>" [--artifact <built.html>] [--plugins <name,name>] [--intake <mime,mime>]');
   process.exit(2);
 };
 if (!name || !flags.id || !flags.label) usage();

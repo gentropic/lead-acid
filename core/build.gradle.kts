@@ -30,7 +30,7 @@ android {
 }
 
 val copyShim by tasks.registering(Copy::class) {
-    from(rootProject.file("lead-acid.js"))
+    from(file("../lead-acid.js"))   // beside core, in this repo and in the npm package alike
     into(layout.buildDirectory.dir("generated/leadacid-assets"))
 }
 tasks.matching { it.name.startsWith("generate") || it.name.startsWith("merge") }.configureEach {

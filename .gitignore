@@ -41,3 +41,6 @@ gnsslog/src/main/assets/
 micro/src/main/assets/
 lamina/src/main/assets/
 ep/src/main/assets/
+
+# npm pack output
+*.tgz

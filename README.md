@@ -73,46 +73,71 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 gradlew.bat :wuffle:assembleRelease :wuffle:bundleRelease   # signed iff keystore.properties — docs/signing.md
 ```
 
-## Make an instrument (the five-minute recipe)
+## Make an app (the five-minute recipe)
 
-You have a single-file HTML tool. You want it on a phone with the parts of Android a browser
-tab can't reach. Three commands:
+You have a single-file HTML tool in its own repo. You want it on a phone with the parts of
+Android a browser tab can't reach. From the repo's root:
 
 ```
-# 1. stamp a module out of the template — id, label, the plugins it needs, the artifact
-node pack-instrument.mjs compass --id org.example.compass --label "Compass" \
-     --plugins sensor,share --artifact path/to/compass.html
-
-# 2. build it (debug for your own phone; release + bundle per docs/signing.md)
-gradlew.bat :compass:assembleDebug
-
-# 3. install it
-adb install -r compass/build/outputs/apk/debug/compass-debug.apk
+npm install --save-dev @gcu/lead-acid
+npx lead-acid init --id org.example.compass --label "Compass" \
+     --artifact dist/compass.html --plugins sensor,share
+npx lead-acid build                 # gradlew :app:assembleDebug in android/, then the APK's path
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-What the stamp does: copies `template/`, sets the namespace + `applicationId`, the label, writes
-the plugin list into BOTH places that must agree (the Gradle dependencies and the activity's
-factory list), drops your artifact at `src/main/assets/artifact.html`, and adds the module to
-`settings.gradle.kts`. Re-running it on the same name regenerates those files in place and keeps
-your artifact unless you pass `--artifact` again. Available plugins: `sensor`, `share`,
-`attest`, `intake` (with `--intake <mime,mime>` to become a share target for those types),
-`gnss`, `camera`; none is also fine. Permissions follow the plugins — the stamped manifest
-requests nothing itself; `gnss` (FINE location) and `camera` (CAMERA) are the ones that bring a
-dangerous permission with them.
+`init` writes `android/` once (a Gradle project with the wrapper, `app/` stamped from
+`template/`) and `lead-acid.json` beside your `package.json`. From then on `android/` is yours:
+the version, the icon, signing (`android/keystore.properties`, see `docs/signing.md`;
+`npx lead-acid build --release` or `--bundle`). Three files are lead-acid's and say so in their
+first line; `npx lead-acid sync` rewrites them from `lead-acid.json`:
+
+- `android/leadacid.settings.gradle.kts`: lead-acid's `core` and the plugins you use, built from
+  source where `leadacid.dir` in `android/gradle.properties` points (the npm package by
+  default, or a clone of this repo). They build under `android/build/leadacid/`, never inside
+  `node_modules`.
+- `android/app/leadacid.gradle.kts`: the plugin dependencies, and the artifact copied in at
+  every build (it is never committed under `src/`).
+- `LeadAcidPlugins.kt`: the same plugins as factories, which your activity uses.
+
+The dependency and the factory list are the two places that must agree; both come from one
+list. `npx lead-acid add <plugin>` / `remove <plugin>` edit it; `npx lead-acid plugins` shows
+the catalog with the permissions each plugin brings. The manifest requests nothing itself: `gnss`
+(FINE location), `camera` (CAMERA) and `speech` (RECORD_AUDIO) are the ones that bring a
+dangerous permission. `intake` with `--intake <mime,mime>` at init makes the app a share target
+for those types.
 
 Your artifact doesn't need to know about the shell. If it wants native features, it imports
-`./lead-acid.js` (served next to it by core) and feature-detects `shell.present`; the same file
-keeps working in a desktop browser with those features simply absent, and `bench.js` mocks the
-native side for desktop development (SPEC §4.7).
+`lead-acid.js` (the package's main export; core also serves it next to the artifact) and
+feature-detects `shell.present`; the same file keeps working in a desktop browser with those
+features simply absent, and `bench.js` (`@gcu/lead-acid/bench`) mocks the native side for
+desktop development (SPEC §4.7).
 
-To swap the icon, replace `src/main/res/drawable/ic_launcher_foreground.xml` (an adaptive-icon
-foreground: 108 dp canvas, keep content inside the central 72 dp) and the background colour in
-`res/values/colors.xml`.
+To swap the icon, replace `app/src/main/res/drawable/ic_launcher_foreground.xml` (an
+adaptive-icon foreground: 108 dp canvas, keep content inside the central 72 dp) and the
+background colour in `res/values/colors.xml`.
+
+### An instrument inside this repo
+
+The instruments developed beside the shell (wuffle, micro, lamina, gnsslog, ep) are modules
+of this build, stamped with `pack-instrument.mjs`:
+
+```
+node pack-instrument.mjs compass --id org.example.compass --label "Compass" \
+     --plugins sensor,share --artifact path/to/compass.html
+gradlew.bat :compass:assembleDebug
+```
+
+It copies `template/`, writes the plugin list into the module's Gradle dependencies and its
+activity, drops the artifact at `src/main/assets/artifact.html`, and adds the module to
+`settings.gradle.kts`. Re-running it on the same name regenerates those files in place. Both
+ways read one plugin catalog, `plugins.mjs`.
 
 **The yearly ratchet.** Google requires `targetSdk` to track the current platform within about a
 year of each release. It lives in ONE place — `gradle/libs.versions.toml`, `targetSdk` (and
 `compileSdk` alongside) — so every instrument built from this repo moves together with a
-one-line change. Rebuild, re-run the bench on a device of that version, ship.
+one-line change. Rebuild, re-run the bench on a device of that version, ship. An app outside
+this repo takes the ratchet with the package: a new `@gcu/lead-acid` version carries it.
 
 ## Layout
 
