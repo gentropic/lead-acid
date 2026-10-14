@@ -1,0 +1,42 @@
+name: Publish @gcu/lead-acid to npm
+
+# Trusted publishing (OIDC, no NPM_TOKEN), as in the auditable monorepo. Bump package.json's version, commit, push,
+# then push the tag:
+#     git tag v0.1.1 && git push origin v0.1.1
+# The tag must match package.json; the package is published from the tag's tree, never from a working copy.
+# npm's trusted-publisher config for @gcu/lead-acid points at gentropic/lead-acid · npm-publish.yml.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write          # OIDC trusted publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify the version matches the tag
+        run: |
+          have="v$(node -p "require('./package.json').version")"
+          if [ "$have" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag is ${GITHUB_REF_NAME} but package.json is $have"; exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install -g npm@latest      # trusted publishing needs npm >= 11.5.1 (node 22 ships npm 10)
+
+      - name: Test the command
+        run: npm test
+
+      - name: Publish
+        run: npm publish --provenance --access public
