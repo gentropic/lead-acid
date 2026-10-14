@@ -28,6 +28,7 @@ test('init writes android/ once, with the plugins in both places', () => {
   assert.match(app, /applicationId = "org\.example\.x"/); assert.match(app, /apply\(from = "leadacid\.gradle\.kts"\)/); assert.doesNotMatch(app, /plugin-share/);
   assert.match(read(d, 'android/gradle.properties'), /^leadacid\.dir=\S+$/m);
   assert.ok(existsSync(join(d, 'android/gradlew')) && existsSync(join(d, 'android/gradle/wrapper/gradle-wrapper.jar')));
+  assert.ok(!read(d, 'android/gradlew').includes('\r'), 'gradlew is LF, whatever the checkout did');
   assert.ok(!existsSync(join(d, 'android/app/src/main/assets')), 'no template artifact to collide with the copied one');
   assert.deepEqual(JSON.parse(read(d, 'lead-acid.json')).plugins, ['intent', 'intake']);
   assert.notEqual(run(d, 'init', '--id', 'org.example.x', '--label', 'X', '--artifact', 'dist/x.html').status, 0, 'a second init refuses');

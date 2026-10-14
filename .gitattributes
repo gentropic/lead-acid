@@ -1,0 +1,5 @@
+# gradlew is a POSIX shell script: LF in every checkout (a CRLF copy fails on macOS and Linux, and init copies it
+# into every app). The .bat stays CRLF; the wrapper jar is binary.
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary

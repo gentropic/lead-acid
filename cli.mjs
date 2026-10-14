@@ -129,6 +129,8 @@ function init() {
   for (const f of ['gradlew', 'gradlew.bat', 'gradle/wrapper/gradle-wrapper.jar', 'gradle/wrapper/gradle-wrapper.properties']) {
     mkdirSync(dirname(join(android, f)), { recursive: true }); copyFileSync(join(ROOT, f), join(android, f));
   }
+  // LF whatever the checkout or the packing machine did to it: a CRLF gradlew does not run on macOS or Linux
+  writeFileSync(join(android, 'gradlew'), read(join(android, 'gradlew')).replace(/\r\n/g, '\n'));
   chmodSync(join(android, 'gradlew'), 0o755);
   const name = label.replace(/[^A-Za-z0-9 _-]/g, '').trim() || 'app';
   write(join(android, 'settings.gradle.kts'), `// Written once by \`lead-acid init\`; yours to edit.

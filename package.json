@@ -1,6 +1,6 @@
 {
   "name": "@gcu/lead-acid",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An Android shell for single-file web artifacts: npx lead-acid init writes android/ into your project, permission-gated Kotlin plugins reach the phone through plain fetch, and lead-acid.js is the page's side.",
   "type": "module",
   "exports": {
@@ -33,7 +33,13 @@
   "scripts": {
     "test": "node --test test/cli.test.mjs"
   },
-  "keywords": ["android", "webview", "single-file", "shell", "gcu"],
+  "keywords": [
+    "android",
+    "webview",
+    "single-file",
+    "shell",
+    "gcu"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
